@@ -8,7 +8,7 @@ Actions stay in ``[-1, 1]`` and are not standardized.
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import NamedTuple, Sequence
 
 import numpy as np
 import torch
@@ -67,30 +67,174 @@ def _predict_actions(
     return np.concatenate(chunks, axis=0)
 
 
-def _candidate_trials(
-    transitions: Sequence[Transition], horizon_k: int
-) -> list[tuple[list[Transition], int, int]]:
-    """Valid ``(traj, t, k)`` with ``1 <= k <= min(K, steps remaining)``."""
-    candidates: list[tuple[list[Transition], int, int]] = []
+DEFAULT_MIN_SUBGOAL_DISTANCE = 0.5
+DEFAULT_MAX_SUBGOAL_DISTANCE = 2.0
+XY_RESTORE_TOL = 1e-4
+# 107-D layout: [xy (2), Ant-v5 proprio (27) = qpos[2:]+qvel, cfrc_ext (78)].
+PROPRIO_SLICE = slice(2, 29)
+CONTACT_SLICE = slice(29, 107)
+
+
+class SubgoalCandidate(NamedTuple):
+    """One in-episode future x/y target for closed-loop worker eval."""
+
+    traj: list[Transition]
+    t: int
+    k: int
+    initial_distance: float
+    start_xy: np.ndarray
+    subgoal_xy: np.ndarray
+
+
+def _future_xy(traj: Sequence[Transition], t: int, k: int) -> np.ndarray:
+    return np.asarray(traj[t + k - 1].next_state[:2], dtype=np.float64)
+
+
+def subgoal_candidates(
+    transitions: Sequence[Transition],
+    horizon_k: int,
+    min_distance: float = DEFAULT_MIN_SUBGOAL_DISTANCE,
+    max_distance: float = DEFAULT_MAX_SUBGOAL_DISTANCE,
+) -> list[SubgoalCandidate]:
+    """In-episode ``(t, k)`` pairs with initial x/y distance in ``[min, max]``.
+
+    Requires ``1 <= k <= K`` and never crosses episode boundaries.
+    """
+    if min_distance > max_distance:
+        raise ValueError(
+            f"min_distance ({min_distance}) > max_distance ({max_distance})"
+        )
+    candidates: list[SubgoalCandidate] = []
     for traj in group_by_episode(transitions).values():
+        traj = list(traj)
         n_steps = len(traj)
         for t in range(n_steps):
             last_k = min(horizon_k, n_steps - t)
+            start_xy = np.asarray(traj[t].state[:2], dtype=np.float64)
             for k in range(1, last_k + 1):
-                candidates.append((traj, t, k))
+                subgoal_xy = _future_xy(traj, t, k)
+                dist = float(np.linalg.norm(start_xy - subgoal_xy))
+                if min_distance <= dist <= max_distance:
+                    candidates.append(
+                        SubgoalCandidate(
+                            traj=traj,
+                            t=t,
+                            k=k,
+                            initial_distance=dist,
+                            start_xy=start_xy,
+                            subgoal_xy=subgoal_xy,
+                        )
+                    )
     return candidates
 
 
-def _set_torso_xy(env, xy: np.ndarray) -> dict:
-    """Teleport the ant torso x/y after reset and return a fresh observation."""
+def choose_unique_trial_indices(
+    n_candidates: int, n_trials: int, rng: np.random.Generator
+) -> np.ndarray:
+    """Sample trial indices without replacement (at most ``n_candidates``)."""
+    if n_candidates <= 0:
+        return np.zeros(0, dtype=np.int64)
+    n = min(int(n_trials), int(n_candidates))
+    return rng.choice(n_candidates, size=n, replace=False)
+
+
+def summarize_subgoal_eval(
+    initials: np.ndarray,
+    finals: np.ndarray,
+    success_threshold: float,
+) -> dict:
+    """Aggregate closed-loop distances (meters)."""
+    initials = np.asarray(initials, dtype=np.float64)
+    finals = np.asarray(finals, dtype=np.float64)
+    if initials.size == 0:
+        return {
+            "n_trials": 0,
+            "mean_initial_distance": float("nan"),
+            "mean_final_distance": float("nan"),
+            "progress_fraction": float("nan"),
+            "success_rate": float("nan"),
+            "mean_distance_reduction": float("nan"),
+            "median_distance_reduction": float("nan"),
+            "fraction_positive_reduction": float("nan"),
+            "fraction_relative_progress_10": float("nan"),
+            "fraction_already_successful_at_start": float("nan"),
+        }
+    reduction = initials - finals
+    with np.errstate(divide="ignore", invalid="ignore"):
+        relative = np.where(initials > 0.0, reduction / initials, 0.0)
+    return {
+        "n_trials": int(initials.size),
+        "mean_initial_distance": float(np.mean(initials)),
+        "mean_final_distance": float(np.mean(finals)),
+        "progress_fraction": float(np.mean(finals < initials)),
+        "success_rate": float(np.mean(finals < success_threshold)),
+        "mean_distance_reduction": float(np.mean(reduction)),
+        "median_distance_reduction": float(np.median(reduction)),
+        "fraction_positive_reduction": float(np.mean(reduction > 0.0)),
+        "fraction_relative_progress_10": float(np.mean(relative >= 0.1)),
+        "fraction_already_successful_at_start": float(
+            np.mean(initials < success_threshold)
+        ),
+    }
+
+
+def restore_ant_state(env, qpos: np.ndarray, qvel: np.ndarray) -> dict:
+    """Restore the recorded MuJoCo configuration and return a maze observation.
+
+    Closed-loop eval must start from the **same physical pose** as ``s_t``.
+    Writing only torso x/y onto a fresh reset leaves joints, height, and
+    velocities at the default standing pose, so ``pi_L`` sees a different
+    107-D state than the one it was cloned from.
+    """
     maze = env.unwrapped
     ant = maze.ant_env
-    qpos = np.array(ant.data.qpos, copy=True)
-    qvel = np.array(ant.data.qvel, copy=True)
-    qpos[0] = float(xy[0])
-    qpos[1] = float(xy[1])
-    ant.set_state(qpos, qvel)
+    ant.set_state(
+        np.asarray(qpos, dtype=np.float64),
+        np.asarray(qvel, dtype=np.float64),
+    )
     return maze._get_obs(ant._get_obs())
+
+
+def restored_state_diagnostics(
+    reconstructed_state: np.ndarray, recorded_state: np.ndarray
+) -> dict:
+    """Compare restored 107-D state to the recorded vector.
+
+    x/y and proprioception (z, orientation, joints, qvel) should match after
+    ``set_state``. Contact-force channels ``state[29:107]`` (Ant-v5 ``cfrc_ext``)
+    can differ because they depend on the last collision resolution, not only
+    on qpos/qvel. Those 78 dims are documented, not silently treated as equal.
+    """
+    reconstructed_state = np.asarray(reconstructed_state, dtype=np.float64)
+    recorded_state = np.asarray(recorded_state, dtype=np.float64)
+    return {
+        "xy_abs_err": float(
+            np.max(np.abs(reconstructed_state[:2] - recorded_state[:2]))
+        ),
+        "proprio_abs_err": float(
+            np.max(
+                np.abs(
+                    reconstructed_state[PROPRIO_SLICE] - recorded_state[PROPRIO_SLICE]
+                )
+            )
+        ),
+        "contact_abs_err": float(
+            np.max(
+                np.abs(
+                    reconstructed_state[CONTACT_SLICE] - recorded_state[CONTACT_SLICE]
+                )
+            )
+        ),
+    }
+
+
+def _assert_xy_restored(reconstructed_state: np.ndarray, recorded_state: np.ndarray) -> None:
+    diag = restored_state_diagnostics(reconstructed_state, recorded_state)
+    if diag["xy_abs_err"] > XY_RESTORE_TOL:
+        raise RuntimeError(
+            "Restored torso x/y does not match recorded state[:2] "
+            f"(max abs err {diag['xy_abs_err']})"
+        )
 
 
 def _worker_action(
@@ -211,49 +355,71 @@ def evaluate_worker_on_recorded_subgoals(
     horizon_k: int = DEFAULT_HORIZON_K,
     n_trials: int = 20,
     success_threshold: float = 0.5,
+    min_distance: float = DEFAULT_MIN_SUBGOAL_DISTANCE,
+    max_distance: float = DEFAULT_MAX_SUBGOAL_DISTANCE,
     seed: int = 0,
+    verbose: bool = False,
 ) -> dict:
-    """Roll ``pi_L`` toward future x/y from recorded val trajectories.
+    """Roll ``pi_L`` toward a nontrivial future x/y from recorded trajectories.
 
-    Samples ``(s_t, g)`` where ``g`` is a later x/y in the **same** episode
-    (offset ``<= K``). The ant is teleported to recorded ``s_t`` x/y, then
-    the worker acts in AntMaze for ``k`` steps. Distances are raw meters.
+    Restores recorded ``qpos``/``qvel`` so the worker starts in the true
+    physical pose, not a reset ant with only x/y overwritten. Subgoals are
+    filtered to ``[min_distance, max_distance]`` meters. Trials are unique
+    ``(episode, t, k)`` pairs (no replacement).
     """
+    empty = summarize_subgoal_eval(
+        np.zeros(0), np.zeros(0), success_threshold
+    )
+    empty["n_candidates"] = 0
+    empty["trials"] = []
     if n_trials <= 0:
-        return {
-            "mean_initial_distance": float("nan"),
-            "mean_final_distance": float("nan"),
-            "progress_fraction": float("nan"),
-            "success_rate": float("nan"),
-            "n_trials": 0,
-        }
+        return empty
 
-    candidates = _candidate_trials(transitions, horizon_k)
+    candidates = subgoal_candidates(
+        transitions,
+        horizon_k=horizon_k,
+        min_distance=min_distance,
+        max_distance=max_distance,
+    )
     if not candidates:
-        raise ValueError("No in-episode (t, k) pairs to evaluate")
+        raise ValueError(
+            "No eligible subgoal candidates in these trajectories. "
+            f"Need in-episode offsets 1..{horizon_k} with initial x/y distance "
+            f"in [{min_distance}, {max_distance}] m. Random short rollouts "
+            "often stay closer than min_distance; collect longer/more diverse "
+            "trajectories or relax the distance window."
+        )
 
     rng = np.random.default_rng(seed)
-    picks = rng.integers(0, len(candidates), size=n_trials)
+    picks = choose_unique_trial_indices(len(candidates), n_trials, rng)
     model.eval()
 
     initials: list[float] = []
     finals: list[float] = []
+    trials: list[dict] = []
     env = make_antmaze()
     try:
         for trial_i, cand_i in enumerate(picks):
-            traj, t, k = candidates[int(cand_i)]
-            start_xy = np.asarray(traj[t].state[:2], dtype=np.float64)
-            subgoal = np.asarray(
-                traj[t + k - 1].next_state[:2], dtype=np.float64
-            )
+            cand = candidates[int(cand_i)]
+            start = cand.traj[cand.t]
+            if start.qpos is None or start.qvel is None:
+                raise ValueError(
+                    "Transition is missing qpos/qvel; recollect transitions "
+                    "with the updated collector before closed-loop eval."
+                )
             observation, _info = env.reset(seed=int(seed + trial_i))
-            observation = _set_torso_xy(env, start_xy)
-            achieved, _ = extract_state_and_goal(observation)
-            initial = float(np.linalg.norm(achieved[:2] - subgoal))
+            observation = restore_ant_state(env, start.qpos, start.qvel)
+            reconstructed, _ = extract_state_and_goal(observation)
+            _assert_xy_restored(reconstructed, start.state)
 
-            for _ in range(k):
+            initial = float(np.linalg.norm(reconstructed[:2] - cand.subgoal_xy))
+            started_inside = initial < success_threshold
+
+            for _ in range(cand.k):
                 state, _ = extract_state_and_goal(observation)
-                action = _worker_action(model, normalizer, state, subgoal)
+                action = _worker_action(
+                    model, normalizer, state, cand.subgoal_xy
+                )
                 observation, _reward, terminated, truncated, _info = env.step(
                     action
                 )
@@ -261,18 +427,36 @@ def evaluate_worker_on_recorded_subgoals(
                     break
 
             achieved, _ = extract_state_and_goal(observation)
-            final = float(np.linalg.norm(achieved[:2] - subgoal))
+            final = float(np.linalg.norm(achieved[:2] - cand.subgoal_xy))
+            reduction = initial - final
+            ended_success = final < success_threshold
+            record = {
+                "episode_id": int(start.episode_id),
+                "t": int(cand.t),
+                "k": int(cand.k),
+                "initial_distance": initial,
+                "final_distance": final,
+                "distance_reduction": reduction,
+                "started_inside_success_radius": started_inside,
+                "ended_successful": ended_success,
+            }
+            if verbose:
+                print(
+                    "  trial "
+                    f"ep={record['episode_id']} t={record['t']} k={record['k']} "
+                    f"init={initial:.4f} final={final:.4f} "
+                    f"d={reduction:.4f} start_ok={started_inside} "
+                    f"end_ok={ended_success}"
+                )
             initials.append(initial)
             finals.append(final)
+            trials.append(record)
     finally:
         env.close()
 
-    initial_arr = np.asarray(initials, dtype=np.float64)
-    final_arr = np.asarray(finals, dtype=np.float64)
-    return {
-        "mean_initial_distance": float(np.mean(initial_arr)),
-        "mean_final_distance": float(np.mean(final_arr)),
-        "progress_fraction": float(np.mean(final_arr < initial_arr)),
-        "success_rate": float(np.mean(final_arr < success_threshold)),
-        "n_trials": int(n_trials),
-    }
+    summary = summarize_subgoal_eval(
+        np.asarray(initials), np.asarray(finals), success_threshold
+    )
+    summary["n_candidates"] = len(candidates)
+    summary["trials"] = trials
+    return summary

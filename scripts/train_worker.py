@@ -10,6 +10,8 @@ from pathlib import Path
 from hwm_director.data.worker_dataset import DEFAULT_HORIZON_K
 from hwm_director.models.worker import GoalConditionedWorker
 from hwm_director.training.train_worker import (
+    DEFAULT_MAX_SUBGOAL_DISTANCE,
+    DEFAULT_MIN_SUBGOAL_DISTANCE,
     evaluate_worker_on_recorded_subgoals,
     train_goal_conditioned_worker,
 )
@@ -57,6 +59,18 @@ def main() -> None:
         help="subgoal-reaching trials after BC (0 to skip)",
     )
     parser.add_argument(
+        "--min-subgoal-distance",
+        type=float,
+        default=DEFAULT_MIN_SUBGOAL_DISTANCE,
+        help="meters; skip eval targets closer than this",
+    )
+    parser.add_argument(
+        "--max-subgoal-distance",
+        type=float,
+        default=DEFAULT_MAX_SUBGOAL_DISTANCE,
+        help="meters; skip eval targets farther than this",
+    )
+    parser.add_argument(
         "--success-threshold",
         type=float,
         default=0.5,
@@ -65,7 +79,7 @@ def main() -> None:
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="print train/validation episode IDs",
+        help="print episode IDs and per-trial eval details",
     )
     args = parser.parse_args()
 
@@ -119,14 +133,35 @@ def main() -> None:
             horizon_k=args.horizon_k,
             n_trials=args.n_eval_trials,
             success_threshold=args.success_threshold,
+            min_distance=args.min_subgoal_distance,
+            max_distance=args.max_subgoal_distance,
             seed=args.seed,
+            verbose=args.verbose,
         )
         print("=== pi_L subgoal eval ===")
+        print(f"  n_candidates: {eval_metrics['n_candidates']}")
         print(f"  n_trials: {eval_metrics['n_trials']}")
         print(f"  mean initial distance (m): {eval_metrics['mean_initial_distance']:.6f}")
         print(f"  mean final distance (m): {eval_metrics['mean_final_distance']:.6f}")
+        print(f"  mean distance reduction (m): {eval_metrics['mean_distance_reduction']:.6f}")
+        print(f"  median distance reduction (m): {eval_metrics['median_distance_reduction']:.6f}")
         print(f"  progress fraction: {eval_metrics['progress_fraction']:.6f}")
-        print(f"  success rate (< {args.success_threshold} m): {eval_metrics['success_rate']:.6f}")
+        print(
+            "  fraction positive reduction: "
+            f"{eval_metrics['fraction_positive_reduction']:.6f}"
+        )
+        print(
+            "  fraction >=10% relative progress: "
+            f"{eval_metrics['fraction_relative_progress_10']:.6f}"
+        )
+        print(
+            "  fraction already successful at start: "
+            f"{eval_metrics['fraction_already_successful_at_start']:.6f}"
+        )
+        print(
+            f"  success rate (final < {args.success_threshold} m): "
+            f"{eval_metrics['success_rate']:.6f}"
+        )
 
 
 if __name__ == "__main__":

@@ -134,6 +134,8 @@ def _normalized_transitions(
             next_state=next_states[i],
             goal=transitions[i].goal,
             episode_id=transitions[i].episode_id,
+            qpos=transitions[i].qpos,
+            qvel=transitions[i].qvel,
         )
         for i in range(len(transitions))
     ]

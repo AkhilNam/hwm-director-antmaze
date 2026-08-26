@@ -24,6 +24,10 @@ class Transition:
 
     ``episode_id`` labels the rollout that produced this step. It is an int,
     not an array, and is used only for trajectory-level train/val splits.
+
+    ``qpos`` / ``qvel`` are optional copies of the MuJoCo configuration at
+    ``s_t`` (before ``action``). They are used to restore the physical Ant
+    for closed-loop worker eval. They are not part of the 107-D learned state.
     """
 
     state: np.ndarray
@@ -31,6 +35,14 @@ class Transition:
     next_state: np.ndarray
     goal: np.ndarray
     episode_id: int
+    qpos: np.ndarray | None = None
+    qvel: np.ndarray | None = None
+
+    def __post_init__(self) -> None:
+        if self.qpos is not None:
+            self.qpos = np.array(self.qpos, copy=True)
+        if self.qvel is not None:
+            self.qvel = np.array(self.qvel, copy=True)
 
     def validate(self) -> None:
         """Check that all fields have the expected 1-D shapes.

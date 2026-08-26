@@ -96,3 +96,7 @@ This worker is **shared by Director and HWM**. There is still no high-level poli
 python scripts/train_worker.py --n-transitions 5000 --horizon-k 10
 pytest
 ```
+
+Closed-loop eval restores the **recorded MuJoCo pose** (`qpos`/`qvel` at `s_t`), not just torso x/y. Subgoals are kept only if initial x/y distance is in `[--min-subgoal-distance, --max-subgoal-distance]` (defaults 0.5–2.0 m). Judge the worker with distance reduction and progress fractions; raw success rate is misleading if many targets already sit inside the 0.5 m radius (`fraction_already_successful_at_start`).
+
+Random-action rollouts are a **development/debug dataset**, not the final offline corpus. They may contain few (or no) pairs 0.5–2.0 m apart within `K` steps; if eval errors, collect more/longer trajectories or widen the distance window.

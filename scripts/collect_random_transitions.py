@@ -29,6 +29,9 @@ def collect_random_transitions(
         observation, _info = env.reset(seed=seed)
         env.action_space.seed(seed)
         while len(transitions) < n_transitions:
+            ant = env.unwrapped.ant_env
+            qpos = np.array(ant.data.qpos, copy=True)
+            qvel = np.array(ant.data.qvel, copy=True)
             action = env.action_space.sample()
             next_observation, _reward, terminated, truncated, _info = env.step(
                 action
@@ -43,6 +46,8 @@ def collect_random_transitions(
                 next_state=encoder.encode(next_state),
                 goal=goal,
                 episode_id=episode_id,
+                qpos=qpos,
+                qvel=qvel,
             )
             transition.validate()
             transitions.append(transition)
