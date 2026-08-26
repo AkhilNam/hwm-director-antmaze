@@ -1,41 +1,58 @@
 # hwm-director-antmaze
 
-Research codebase for a future comparison of **Director** and an explicit **Hierarchical World Model (HWM)** on AntMaze.
+Compare **Director** and an explicit **Hierarchical World Model (HWM)** on AntMaze.
 
-**Milestone 1 is environment inspection only.** There are no learned models, training loops, or datasets in this repository yet.
+## Setup
+
+Gymnasium-Robotics documents Python 3.10–3.13. Use a 3.12 or 3.13 virtualenv if the system Python is newer.
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
 
 ## Environment
 
 - Package: [`gymnasium-robotics==1.4.2`](https://pypi.org/project/gymnasium-robotics/)
 - Env ID: `AntMaze_UMaze-v5`
 - API: Gymnasium (`observation, reward, terminated, truncated, info`)
-- Physics: official `mujoco` Python bindings (not `mujoco-py` / D4RL)
+- Physics: official `mujoco` Python bindings (not `mujoco-py`)
 
-Gymnasium-Robotics currently documents Python 3.10–3.13. Use a 3.12 or 3.13 virtualenv if the system Python is newer.
+Raw observations are a Dict:
 
-## Install and inspect
+| Key | Shape | Meaning |
+| --- | --- | --- |
+| `observation` | `(105,)` | Ant-v5 body state (no torso x/y) |
+| `achieved_goal` | `(2,)` | current torso x/y |
+| `desired_goal` | `(2,)` | task target x/y |
+
+## State representation
+
+The low-level world model \(f_L\) consumes one-step tuples \((s_t, a_t, s_{t+1})\), where
+
+- \(s_t = [\texttt{achieved\_goal},\; \texttt{observation}]\) with shape \((107,)\)
+- \(g^\star = \texttt{desired\_goal}\) with shape \((2,)\)
+- \(E(s_t) = s_t\) via `IdentityEncoder` (NumPy copy; not learned)
+
+Actions have shape `(8,)`.
 
 ```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e .
 python scripts/inspect_antmaze.py
+python scripts/collect_random_transitions.py
+pytest
 ```
 
-## Future notation (not implemented)
+`collect_random_transitions.py` prints statistics in memory and does not write a dataset.
 
-These names are reserved for later milestones. **None of them are implemented yet.**
+## Notation
 
-| Symbol | Meaning |
-| --- | --- |
-| \(E\) | encoder (observation / history → latent state) |
-| \(\pi_L\) | low-level worker |
-| \(f_L\) | one-step (low-level) world model |
-| \(\pi_H\) | high-level controller (Director manager or planner) |
-| \(f_H\) | high-level model (explicit in HWM; implicit / absent in Director) |
+| Symbol | Meaning | Status |
+| --- | --- | --- |
+| \(E\) | encoder | identity only |
+| \(\pi_L\) | low-level worker | not implemented |
+| \(f_L\) | one-step world model | not implemented |
+| \(\pi_H\) | high-level controller | not implemented |
+| \(f_H\) | high-level model | not implemented |
 
-Also not in this milestone: PyTorch, RSSM, JEPA, hierarchical rollouts, offline RL, or rendering.
-
-## Offline data
-
-**The offline dataset source has not been selected yet.** Do not assume D4RL, Minari, or any other corpus until that decision is recorded here.
+Offline dataset source is not selected yet.

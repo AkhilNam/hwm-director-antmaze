@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hwm-director-antmaze"
 version = "0.1.0"
-description = "Milestone 1: AntMaze environment inspection for a future Director vs HWM comparison."
+description = "Director vs hierarchical world models on AntMaze."
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 dependencies = [
@@ -14,5 +14,11 @@ dependencies = [
     "numpy>=1.21",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
