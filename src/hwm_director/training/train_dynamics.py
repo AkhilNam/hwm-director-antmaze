@@ -22,34 +22,57 @@ from hwm_director.data.transitions import Transition
 from hwm_director.models.dynamics_low import LowLevelDynamicsModel
 
 
-def split_indices(
-    n: int, val_fraction: float = 0.2, seed: int = 0
+def split_episode_indices(
+    transitions: Sequence[Transition],
+    val_fraction: float = 0.2,
+    seed: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Random train/validation index split with no overlap.
+    """Train/validation split at the episode (trajectory) level.
 
-    Parameters
-    ----------
-    n:
-        Number of transitions.
-    val_fraction:
-        Fraction assigned to validation (e.g. ``0.2``).
-    seed:
-        RNG seed for the permutation.
+    Unique episode IDs are shuffled with ``seed``. Whole episodes go to train
+    or validation, so adjacent steps ``(s_t, a_t, s_{t+1})`` and
+    ``(s_{t+1}, a_{t+1}, s_{t+2})`` never cross the split.
+
+    ``val_fraction`` is the fraction of **episodes**, not transitions.
 
     Returns
     -------
     train_idx, val_idx
-        1-D integer arrays. Disjoint, union is ``{0, ..., n-1}``.
+        Transition indices. Disjoint, union is ``{0, ..., n-1}``.
+
+    Raises
+    ------
+    ValueError
+        If fewer than two unique episodes are present.
     """
-    permutation = np.random.default_rng(seed).permutation(n)
-    n_val = int(round(n * val_fraction))
-    if n >= 2:
-        n_val = min(max(n_val, 1), n - 1)
-    else:
-        n_val = 0
-    if n_val == 0:
-        return permutation, permutation[:0]
-    return permutation[:-n_val], permutation[-n_val:]
+    n = len(transitions)
+    if n == 0:
+        raise ValueError("Need at least one transition to split")
+
+    episode_ids = np.array(sorted({int(t.episode_id) for t in transitions}))
+    n_episodes = int(episode_ids.size)
+    if n_episodes < 2:
+        raise ValueError(
+            "Need at least 2 unique episodes for a train/val split, "
+            f"got {n_episodes}"
+        )
+
+    n_val = int(round(n_episodes * val_fraction))
+    n_val = min(max(n_val, 1), n_episodes - 1)
+
+    shuffled = np.random.default_rng(seed).permutation(episode_ids)
+    val_episodes = set(int(x) for x in shuffled[-n_val:])
+    train_episodes = set(int(x) for x in shuffled[:-n_val])
+
+    train_idx = np.array(
+        [i for i, t in enumerate(transitions) if int(t.episode_id) in train_episodes],
+        dtype=np.int64,
+    )
+    val_idx = np.array(
+        [i for i, t in enumerate(transitions) if int(t.episode_id) in val_episodes],
+        dtype=np.int64,
+    )
+    return train_idx, val_idx
 
 
 def no_change_baseline_mse(
@@ -106,6 +129,7 @@ def _normalized_transitions(
             action=transitions[i].action,
             next_state=next_states[i],
             goal=transitions[i].goal,
+            episode_id=transitions[i].episode_id,
         )
         for i in range(len(transitions))
     ]
@@ -139,24 +163,31 @@ def train_low_level_dynamics(
 
     Workflow:
 
-    1. ``split_indices`` on ``len(transitions)``.
+    1. ``split_episode_indices`` so whole trajectories stay in one split.
     2. Stack train/val states; **fit** ``StateNormalizer`` on train states only.
     3. Train MLP to predict delta with MSE in normalized coordinates.
-    4. Report train MSE, val MSE, no-change val MSE, val x/y MSE.
+    4. Report train MSE, val MSE, no-change val MSE, val x/y MSE, and
+       episode/transition counts.
 
     Returns
     -------
     dict
         ``train_mse``, ``val_mse``, ``no_change_val_mse``, ``val_xy_mse``,
-        plus the fitted ``model`` and ``normalizer``.
+        split diagnostics, plus the fitted ``model`` and ``normalizer``.
     """
     n = len(transitions)
     if n < 2:
         raise ValueError("Need at least 2 transitions for a train/val split")
 
-    train_idx, val_idx = split_indices(n, val_fraction=val_fraction, seed=seed)
+    train_idx, val_idx = split_episode_indices(
+        transitions, val_fraction=val_fraction, seed=seed
+    )
     train_raw = _select(transitions, train_idx)
     val_raw = _select(transitions, val_idx)
+
+    train_episode_ids = tuple(sorted({int(t.episode_id) for t in train_raw}))
+    val_episode_ids = tuple(sorted({int(t.episode_id) for t in val_raw}))
+    all_episode_ids = tuple(sorted({int(t.episode_id) for t in transitions}))
 
     normalizer = StateNormalizer().fit(_stack_states(train_raw, "state"))
     train_norm = _normalized_transitions(train_raw, normalizer)
@@ -206,6 +237,13 @@ def train_low_level_dynamics(
         "val_mse": val_mse,
         "no_change_val_mse": no_change,
         "val_xy_mse": val_xy,
+        "n_episodes": len(all_episode_ids),
+        "n_train_episodes": len(train_episode_ids),
+        "n_val_episodes": len(val_episode_ids),
+        "n_train_transitions": len(train_raw),
+        "n_val_transitions": len(val_raw),
+        "train_episode_ids": train_episode_ids,
+        "val_episode_ids": val_episode_ids,
         "model": model,
         "normalizer": normalizer,
     }

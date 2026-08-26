@@ -34,6 +34,11 @@ def main() -> None:
         default=[256, 256],
         help="MLP hidden layer widths",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="print train/validation episode IDs",
+    )
     args = parser.parse_args()
 
     transitions = collect_random_transitions(args.n_transitions, args.seed)
@@ -57,6 +62,14 @@ def main() -> None:
     vs_baseline = "beats" if val_mse < no_change else "does not beat"
 
     print("=== f_L report ===")
+    print(f"  n_episodes: {metrics['n_episodes']}")
+    print(f"  n_train_episodes: {metrics['n_train_episodes']}")
+    print(f"  n_val_episodes: {metrics['n_val_episodes']}")
+    print(f"  n_train_transitions: {metrics['n_train_transitions']}")
+    print(f"  n_val_transitions: {metrics['n_val_transitions']}")
+    if args.verbose:
+        print(f"  train_episode_ids: {metrics['train_episode_ids']}")
+        print(f"  val_episode_ids: {metrics['val_episode_ids']}")
     print(f"  train MSE: {train_mse:.6f}")
     print(f"  val MSE: {val_mse:.6f}")
     print(f"  no-change baseline val MSE: {no_change:.6f}")

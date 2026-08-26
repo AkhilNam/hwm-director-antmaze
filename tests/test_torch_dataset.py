@@ -15,6 +15,7 @@ def _one_transition() -> Transition:
         action=np.zeros(8, dtype=np.float32),
         next_state=np.ones(107, dtype=np.float64),
         goal=np.zeros(2, dtype=np.float64),
+        episode_id=0,
     )
 
 

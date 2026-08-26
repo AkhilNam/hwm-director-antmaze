@@ -24,6 +24,7 @@ def collect_random_transitions(
     env = make_antmaze(DEFAULT_ENV_ID)
     encoder = IdentityEncoder()
     transitions: list[Transition] = []
+    episode_id = 0
     try:
         observation, _info = env.reset(seed=seed)
         env.action_space.seed(seed)
@@ -34,16 +35,20 @@ def collect_random_transitions(
             )
             state, goal = extract_state_and_goal(observation)
             next_state, _ = extract_state_and_goal(next_observation)
+            # Store this step under the current episode, including the last
+            # step that triggers terminated/truncated, then bump the id.
             transition = Transition(
                 state=encoder.encode(state),
                 action=action,
                 next_state=encoder.encode(next_state),
                 goal=goal,
+                episode_id=episode_id,
             )
             transition.validate()
             transitions.append(transition)
             if terminated or truncated:
                 observation, _info = env.reset()
+                episode_id += 1
             else:
                 observation = next_observation
     finally:
@@ -68,9 +73,11 @@ def main() -> None:
     args = parser.parse_args()
 
     transitions = collect_random_transitions(args.n_transitions, args.seed)
+    n_episodes = len({t.episode_id for t in transitions})
     print("=== collection summary ===")
     print(f"  env_id={DEFAULT_ENV_ID}")
     print(f"  n_transitions={len(transitions)}")
+    print(f"  n_episodes={n_episodes}")
     print(summarize_transitions(transitions))
 
     if args.print_state_stats:

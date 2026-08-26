@@ -78,4 +78,4 @@ python scripts/train_low_level_dynamics.py --n-transitions 5000
 pytest
 ```
 
-Do not persist transitions to disk yet. Fit normalization on training states only.
+Do not persist transitions to disk yet. Train/validation splits are **trajectory/episode-level**: adjacent transitions from the same rollout are never divided across splits. Normalization statistics are fit only on training episodes.

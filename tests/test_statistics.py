@@ -26,6 +26,7 @@ def test_summarize_transitions_reports_counts_and_shapes() -> None:
             action=np.zeros(8, dtype=np.float32),
             next_state=next_state,
             goal=np.zeros(2),
+            episode_id=0,
         )
     ]
     summary = summarize_transitions(transitions)

@@ -21,12 +21,16 @@ class Transition:
     action:     (8,)
     next_state: (107,)
     goal:       (2,)
+
+    ``episode_id`` labels the rollout that produced this step. It is an int,
+    not an array, and is used only for trajectory-level train/val splits.
     """
 
     state: np.ndarray
     action: np.ndarray
     next_state: np.ndarray
     goal: np.ndarray
+    episode_id: int
 
     def validate(self) -> None:
         """Check that all fields have the expected 1-D shapes.
