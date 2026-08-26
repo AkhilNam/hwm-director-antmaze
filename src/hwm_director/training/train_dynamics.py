@@ -54,7 +54,11 @@ def split_episode_indices(
     if n_episodes < 2:
         raise ValueError(
             "Need at least 2 unique episodes for a train/val split, "
-            f"got {n_episodes}"
+            f"got {n_episodes} from {n} transitions. "
+            "AntMaze_UMaze-v5 episodes often run ~700 steps, so "
+            "--n-transitions 256 is usually a single unfinished episode. "
+            "Use at least ~1500–5000 transitions (or more) so collection "
+            "covers two resets."
         )
 
     n_val = int(round(n_episodes * val_fraction))

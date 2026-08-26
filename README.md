@@ -50,7 +50,7 @@ pytest
 | Symbol | Meaning | Status |
 | --- | --- | --- |
 | \(E\) | encoder | identity only |
-| \(\pi_L\) | low-level worker | not implemented |
+| \(\pi_L\) | low-level worker | implemented (BC toward future x/y) |
 | \(f_L\) | one-step world model | implemented (delta MLP) |
 | \(\pi_H\) | high-level controller | not implemented |
 | \(f_H\) | high-level model | not implemented |
@@ -79,3 +79,20 @@ pytest
 ```
 
 Do not persist transitions to disk yet. Train/validation splits are **trajectory/episode-level**: adjacent transitions from the same rollout are never divided across splits. Normalization statistics are fit only on training episodes.
+
+## Milestone 3 — shared worker \(\pi_L\)
+
+**Goal:** implement the remaining shared low-level piece (with \(E\) and \(f_L\)):
+
+\[
+\pi_L(s_t, g_\tau) \rightarrow a_t
+\]
+
+First baseline: \(g_\tau \in \mathbb{R}^2\) is a **target future x/y** from the same episode, at most \(K\) steps ahead (default \(K=10\)). Training is behavior cloning of the recorded action \(a_t\).
+
+This worker is **shared by Director and HWM**. There is still no high-level policy \(\pi_H\), no explicit \(f_H\), and no RSSM/JEPA.
+
+```bash
+python scripts/train_worker.py --n-transitions 5000 --horizon-k 10
+pytest
+```

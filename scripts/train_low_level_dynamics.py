@@ -42,7 +42,8 @@ def main() -> None:
     args = parser.parse_args()
 
     transitions = collect_random_transitions(args.n_transitions, args.seed)
-    print(f"collected {len(transitions)} transitions")
+    n_episodes = len({t.episode_id for t in transitions})
+    print(f"collected {len(transitions)} transitions across {n_episodes} episodes")
 
     model = LowLevelDynamicsModel(hidden_dims=tuple(args.hidden_dims))
     metrics = train_low_level_dynamics(
