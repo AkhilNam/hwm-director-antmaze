@@ -12,6 +12,7 @@ dependencies = [
     "gymnasium>=1.2,<2",
     "gymnasium-robotics==1.4.2",
     "numpy>=1.21",
+    "torch>=2.2",
 ]
 
 [project.optional-dependencies]

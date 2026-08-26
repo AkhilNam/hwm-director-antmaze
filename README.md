@@ -51,8 +51,31 @@ pytest
 | --- | --- | --- |
 | \(E\) | encoder | identity only |
 | \(\pi_L\) | low-level worker | not implemented |
-| \(f_L\) | one-step world model | not implemented |
+| \(f_L\) | one-step world model | implemented (delta MLP) |
 | \(\pi_H\) | high-level controller | not implemented |
 | \(f_H\) | high-level model | not implemented |
 
-Offline dataset source is not selected yet.
+Offline dataset source is not selected yet. Random rollouts stay in memory.
+
+## Milestone 2 — one-step \(f_L\)
+
+**Goal:** learn primitive one-step dynamics
+
+\[
+f_L(s_t, a_t) \rightarrow \hat s_{t+1}
+\]
+
+with the current representation \(E(s_t) = s_t\) (identity; 107-D baseline state).
+
+This is **not** Director and **not** HWM. Both of those systems will reuse the same \(f_L\). RSSM and JEPA are deferred on purpose so dynamics quality is not mixed with representation learning.
+
+The network predicts a **state delta** \(\hat s_{t+1} - s_t\) (implementation choice). Wu’s framework only requires one-step prediction, not residual form.
+
+```bash
+pip install -e ".[dev]"
+python scripts/collect_random_transitions.py --n-transitions 5000 --print-state-stats
+python scripts/train_low_level_dynamics.py --n-transitions 5000
+pytest
+```
+
+Do not persist transitions to disk yet. Fit normalization on training states only.

@@ -1,4 +1,4 @@
-"""Tests for TransitionDataset. Fail until __getitem__ TODOs are filled."""
+"""Tests for TransitionDataset."""
 
 from __future__ import annotations
 

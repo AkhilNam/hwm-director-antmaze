@@ -1,4 +1,4 @@
-"""Tests for StateNormalizer. Fail until TODOs in normalization.py are filled."""
+"""Tests for StateNormalizer."""
 
 from __future__ import annotations
 
