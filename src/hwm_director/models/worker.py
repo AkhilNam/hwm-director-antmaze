@@ -9,7 +9,7 @@ sampled distribution.
 This module is **not** Director and **not** HWM. Both of those systems will
 call the same ``pi_L`` once a high-level command has been turned into ``g_tau``.
 There is no ``pi_H`` / ``f_H`` here. RSSM and JEPA are still unused; ``s_t``
-is the identity-encoded 107-D state.
+is the identity-encoded 29-D state.
 """
 
 from __future__ import annotations
@@ -24,7 +24,8 @@ from hwm_director.data.transitions import ACTION_DIM
 class GoalConditionedWorker(nn.Module):
     """MLP ``[state, subgoal] -> action`` with tanh squashing.
 
-    Default widths: ``109 -> 256 -> 256 -> 8``.
+    Default widths: ``(STATE_DIM + ACHIEVED_GOAL_DIM) -> 256 -> 256 -> ACTION_DIM``
+    i.e. ``31 -> 256 -> 256 -> 8``.
     """
 
     def __init__(
@@ -55,13 +56,13 @@ class GoalConditionedWorker(nn.Module):
         Parameters
         ----------
         state:
-            Shape ``(..., 107)``.
+            Shape ``(..., STATE_DIM)``.
         subgoal:
-            Shape ``(..., 2)``.
+            Shape ``(..., ACHIEVED_GOAL_DIM)``.
 
         Returns
         -------
         torch.Tensor
-            Shape ``(..., 8)``, values in ``[-1, 1]`` after tanh.
+            Shape ``(..., ACTION_DIM)``, values in ``[-1, 1]`` after tanh.
         """
         return torch.tanh(self.net(torch.cat([state, subgoal], dim=-1)))

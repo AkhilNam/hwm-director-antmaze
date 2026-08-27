@@ -5,9 +5,8 @@ from __future__ import annotations
 import numpy as np
 
 from hwm_director.data.normalization import StateNormalizer
-from hwm_director.data.state import extract_state_and_goal
-from hwm_director.data.transitions import Transition
-from hwm_director.envs.antmaze import make_antmaze
+from hwm_director.data.state import STATE_DIM, extract_state_and_goal
+from hwm_director.envs.antmaze import DEFAULT_ENV_ID, make_antmaze
 from hwm_director.models.worker import GoalConditionedWorker
 from hwm_director.training.train_worker import (
     choose_unique_trial_indices,
@@ -18,29 +17,28 @@ from hwm_director.training.train_worker import (
     subgoal_candidates,
     summarize_subgoal_eval,
 )
+from tests.helpers import make_transition
 
 
 def _xy_step(
     episode_id: int, t: int, x: float, next_x: float, y: float = 0.0
-) -> Transition:
-    state = np.zeros(107)
-    next_state = np.zeros(107)
+):
+    state = np.zeros(STATE_DIM)
+    next_state = np.zeros(STATE_DIM)
     state[0] = x
     state[1] = y
     next_state[0] = next_x
     next_state[1] = y
-    return Transition(
-        state=state,
-        action=np.zeros(8, dtype=np.float32),
-        next_state=next_state,
-        goal=np.zeros(2),
+    return make_transition(
         episode_id=episode_id,
+        state=state,
+        next_state=next_state,
         qpos=np.zeros(15),
         qvel=np.zeros(14),
     )
 
 
-def _walk(episode_id: int, n_steps: int, step: float) -> list[Transition]:
+def _walk(episode_id: int, n_steps: int, step: float):
     return [
         _xy_step(episode_id, t, t * step, (t + 1) * step) for t in range(n_steps)
     ]
@@ -110,6 +108,7 @@ def test_summarize_already_successful_and_reductions() -> None:
 def test_restore_ant_state_matches_recorded_xy() -> None:
     env = make_antmaze()
     try:
+        assert env.spec is None or env.spec.id == DEFAULT_ENV_ID
         observation, _info = env.reset(seed=0)
         ant = env.unwrapped.ant_env
         qpos = np.array(ant.data.qpos, copy=True)
@@ -122,6 +121,7 @@ def test_restore_ant_state_matches_recorded_xy() -> None:
         diag = restored_state_diagnostics(restored, recorded)
         assert diag["xy_abs_err"] < 1e-4
         assert diag["proprio_abs_err"] < 1e-4
+        assert "contact_abs_err" not in diag
     finally:
         env.close()
 
@@ -145,15 +145,39 @@ def test_random_controller_shape_bounds_and_seed() -> None:
 
 def test_empty_eval_has_three_controller_metrics() -> None:
     model = GoalConditionedWorker(hidden_dims=(8,))
-    normalizer = StateNormalizer().fit(np.zeros((2, 107)))
+    normalizer = StateNormalizer().fit(np.zeros((2, STATE_DIM)))
     result = evaluate_worker_on_recorded_subgoals(
-        [], model, normalizer, n_trials=0
+        [], model, normalizer, n_trials=0, dataset_id=None
     )
     for name in ("worker", "zero", "random"):
         assert "mean_final_distance" in result[name]
         assert "success_rate" in result[name]
     assert result["n_trials"] == 0
     assert result["candidate_indices"] == []
+    assert result["skipped"] is False
+
+
+def test_eval_skips_when_qpos_qvel_missing() -> None:
+    state = np.zeros(STATE_DIM)
+    next_state = np.zeros(STATE_DIM)
+    next_state[0] = 0.7
+    transition = make_transition(state=state, next_state=next_state)
+    model = GoalConditionedWorker(hidden_dims=(8,))
+    normalizer = StateNormalizer().fit(np.stack([state, next_state]))
+    result = evaluate_worker_on_recorded_subgoals(
+        [transition],
+        model,
+        normalizer,
+        horizon_k=1,
+        n_trials=5,
+        min_distance=0.5,
+        max_distance=2.0,
+        dataset_id=None,
+    )
+    assert result["skipped"] is True
+    assert result["n_trials"] == 0
+    assert "qpos" in result["skip_reason"] or "qvel" in result["skip_reason"]
+    assert "TODO" in result["todo"]
 
 
 def test_three_controllers_share_candidates_and_restore_each_rollout() -> None:
@@ -169,12 +193,10 @@ def test_three_controllers_share_candidates_and_restore_each_rollout() -> None:
 
     next_state = np.array(recorded, copy=True)
     next_state[0] = recorded[0] + 0.7
-    transition = Transition(
+    transition = make_transition(
         state=recorded,
-        action=np.zeros(8, dtype=np.float32),
         next_state=next_state,
         goal=goal,
-        episode_id=0,
         qpos=qpos,
         qvel=qvel,
     )
@@ -189,7 +211,9 @@ def test_three_controllers_share_candidates_and_restore_each_rollout() -> None:
         min_distance=0.5,
         max_distance=2.0,
         seed=0,
+        dataset_id=None,
     )
+    assert result["skipped"] is False
     assert result["n_trials"] == 1
     assert result["n_restores"] == 3
     assert result["candidate_indices"] == [0]

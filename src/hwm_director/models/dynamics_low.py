@@ -15,7 +15,7 @@ where ``delta_s = s_{t+1} - s_t``. Nearby AntMaze states differ by a small
 residual (especially x/y), so learning the change is usually easier than
 regurgitating absolute coordinates.
 
-``E`` is still identity: ``s_t`` is the 107-D baseline vector, not a learned
+``E`` is still identity: ``s_t`` is the 29-D baseline vector, not a learned
 latent. RSSM/JEPA are not used here. ``f_L`` is shared later by Director and
 HWM; this file is not either system.
 """
@@ -35,9 +35,9 @@ class LowLevelDynamicsModel(nn.Module):
     Parameters
     ----------
     state_dim:
-        Default ``107``.
+        Default ``STATE_DIM`` (29).
     action_dim:
-        Default ``8``.
+        Default ``ACTION_DIM`` (8).
     hidden_dims:
         Hidden layer widths, e.g. ``(256, 256)``.
     """
@@ -68,14 +68,14 @@ class LowLevelDynamicsModel(nn.Module):
         Parameters
         ----------
         state:
-            Shape ``(..., 107)``.
+            Shape ``(..., STATE_DIM)``.
         action:
-            Shape ``(..., 8)``.
+            Shape ``(..., ACTION_DIM)``.
 
         Returns
         -------
         torch.Tensor
-            Predicted delta, shape ``(..., 107)``.
+            Predicted delta, shape ``(..., STATE_DIM)``.
         """
         concat = torch.cat([state, action], dim=-1)
         return self.net(concat)
@@ -85,7 +85,6 @@ class LowLevelDynamicsModel(nn.Module):
     ) -> torch.Tensor:
         """Reconstruct ``hat{s}_{t+1} = s_t + hat{delta}_t``.
 
-        Shapes match ``forward``: ``(..., 107)``.
+        Shapes match ``forward``: ``(..., STATE_DIM)``.
         """
         return state + self.forward(state, action)
-

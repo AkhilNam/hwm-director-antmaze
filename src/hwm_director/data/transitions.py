@@ -17,17 +17,18 @@ class Transition:
 
     Expected shapes
     ---------------
-    state:      (107,)
-    action:     (8,)
-    next_state: (107,)
-    goal:       (2,)
+    state:      (STATE_DIM,)   # 29 = achieved_goal (2) + Ant-v4 observation (27)
+    action:     (ACTION_DIM,)  # 8
+    next_state: (STATE_DIM,)
+    goal:       (GOAL_DIM,)    # 2, desired_goal
 
     ``episode_id`` labels the rollout that produced this step. It is an int,
     not an array, and is used only for trajectory-level train/val splits.
 
     ``qpos`` / ``qvel`` are optional copies of the MuJoCo configuration at
-    ``s_t`` (before ``action``). They are used to restore the physical Ant
-    for closed-loop worker eval. They are not part of the 107-D learned state.
+    ``s_t`` (before ``action``). For Minari Ant-v4 they are filled from the
+    exact mapping in ``ant_v4_qpos_qvel_from_state`` (or from episode infos
+    when those arrays are present). They are not part of the learned state.
     """
 
     state: np.ndarray

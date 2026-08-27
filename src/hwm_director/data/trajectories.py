@@ -14,7 +14,7 @@ def group_by_episode(
 
     Each transition appears in exactly one list. Order within an episode is
     the order those steps appear in ``transitions`` (already chronological
-    if they came from ``collect_random_transitions``).
+    if they came from the Minari loader or the random collector).
     """
     grouped: dict[int, list[Transition]] = {}
     for transition in transitions:

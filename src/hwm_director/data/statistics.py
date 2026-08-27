@@ -1,10 +1,10 @@
 """Summaries over collected states.
 
-``state`` layout:
+``state`` layout (AntMaze_UMaze-v4 / Minari umaze-v1):
 
     index 0: x (from achieved_goal)
     index 1: y (from achieved_goal)
-    index 2: start of the 105-D Ant observation
+    index 2: start of the 27-D Ant-v4 observation
 """
 
 from __future__ import annotations
@@ -23,12 +23,13 @@ def compute_state_statistics(states: np.ndarray) -> dict[str, np.ndarray]:
     Parameters
     ----------
     states:
-        Array of shape ``(N, 107)``.
+        Array of shape ``(N, STATE_DIM)``.
 
     Returns
     -------
     dict
-        Keys ``mean``, ``std``, ``min``, ``max``. Each value has shape ``(107,)``.
+        Keys ``mean``, ``std``, ``min``, ``max``. Each value has shape
+        ``(STATE_DIM,)``.
     """
     states = np.asarray(states)
     return {

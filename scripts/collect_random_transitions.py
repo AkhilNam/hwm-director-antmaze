@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Collect random AntMaze transitions ``(s_t, a_t, s_{t+1})``."""
+"""Collect random AntMaze transitions ``(s_t, a_t, s_{t+1})``.
+
+Debugging / smoke-test utility only. Do not use this as the default source
+for ``f_L`` or ``pi_L`` training. The research baseline loads Minari
+``D4RL/antmaze/umaze-v1`` instead.
+"""
 
 from __future__ import annotations
 

@@ -1,10 +1,11 @@
-"""Per-dimension mean/std normalizer for baseline states of shape ``(107,)``.
+"""Per-dimension mean/std normalizer for baseline states of shape ``(STATE_DIM,)``.
 
-Fit on a stacked array of shape ``(N, 107)``. ``normalize`` / ``denormalize``
-accept ``(N, 107)`` or a single ``(107,)`` and must preserve that shape.
+Fit on a stacked array of shape ``(N, STATE_DIM)``. ``normalize`` /
+``denormalize`` accept ``(N, STATE_DIM)`` or a single ``(STATE_DIM,)`` and
+must preserve that shape.
 
-``std`` is guarded with ``eps`` so near-constant dimensions (e.g. unused
-contact-force channels) do not blow up. The map should be invertible:
+``std`` is guarded with ``eps`` so near-constant dimensions do not blow up.
+The map should be invertible:
 
     denormalize(normalize(x)) ≈ x
 """
@@ -30,7 +31,7 @@ class StateNormalizer:
         Parameters
         ----------
         states:
-            ``(N, 107)`` or ``(107,)``.
+            ``(N, STATE_DIM)`` or ``(STATE_DIM,)``.
 
         Returns
         -------

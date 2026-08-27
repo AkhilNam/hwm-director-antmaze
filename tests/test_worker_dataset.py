@@ -5,27 +5,27 @@ from __future__ import annotations
 import numpy as np
 
 from hwm_director.data.normalization import StateNormalizer
-from hwm_director.data.transitions import Transition
+from hwm_director.data.state import STATE_DIM
 from hwm_director.data.worker_dataset import WorkerDataset, normalize_subgoal
 from hwm_director.training.train_dynamics import split_episode_indices
+from tests.helpers import make_transition
 
 
-def _episode(episode_id: int, length: int) -> list[Transition]:
-    steps: list[Transition] = []
+def _episode(episode_id: int, length: int) -> list:
+    steps = []
     for t in range(length):
-        state = np.zeros(107)
-        next_state = np.zeros(107)
+        state = np.zeros(STATE_DIM)
+        next_state = np.zeros(STATE_DIM)
         state[0] = float(episode_id)
         state[1] = float(t)
         next_state[0] = float(episode_id)
         next_state[1] = float(t + 1)
         steps.append(
-            Transition(
-                state=state,
-                action=np.full(8, t, dtype=np.float32),
-                next_state=next_state,
-                goal=np.zeros(2),
+            make_transition(
                 episode_id=episode_id,
+                state=state,
+                next_state=next_state,
+                action=np.full(8, t, dtype=np.float32),
             )
         )
     return steps
@@ -65,8 +65,8 @@ def test_worker_split_episodes_do_not_overlap() -> None:
 
 def test_subgoal_normalization_uses_training_xy_stats_only() -> None:
     rng = np.random.default_rng(0)
-    train_states = rng.normal(loc=10.0, scale=2.0, size=(64, 107))
-    val_states = rng.normal(loc=0.0, scale=1.0, size=(64, 107))
+    train_states = rng.normal(loc=10.0, scale=2.0, size=(64, STATE_DIM))
+    val_states = rng.normal(loc=0.0, scale=1.0, size=(64, STATE_DIM))
     normalizer = StateNormalizer().fit(train_states)
     xy = normalizer.mean[:2].copy()
     out = normalize_subgoal(xy, normalizer)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print AntMaze_UMaze-v5 spaces and a short random-action rollout."""
+"""Print AntMaze_UMaze-v4 spaces and a short random-action rollout."""
 
 from __future__ import annotations
 

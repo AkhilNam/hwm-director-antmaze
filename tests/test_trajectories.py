@@ -4,20 +4,15 @@ from __future__ import annotations
 
 import numpy as np
 
+from hwm_director.data.state import STATE_DIM
 from hwm_director.data.trajectories import group_by_episode
-from hwm_director.data.transitions import Transition
+from tests.helpers import make_transition
 
 
-def _step(episode_id: int, mark: float) -> Transition:
-    state = np.zeros(107)
+def _step(episode_id: int, mark: float):
+    state = np.zeros(STATE_DIM)
     state[0] = mark
-    return Transition(
-        state=state,
-        action=np.zeros(8, dtype=np.float32),
-        next_state=np.zeros(107),
-        goal=np.zeros(2),
-        episode_id=episode_id,
-    )
+    return make_transition(episode_id=episode_id, state=state)
 
 
 def test_group_by_episode_membership_and_order() -> None:

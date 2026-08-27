@@ -5,27 +5,20 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from hwm_director.data.transitions import Transition
+from hwm_director.data.state import STATE_DIM
 from hwm_director.training.train_dynamics import (
     next_position_mse,
     no_change_baseline_mse,
     split_episode_indices,
 )
+from tests.helpers import make_transition
 
 
-def _transitions_for_episodes(lengths: list[int]) -> list[Transition]:
-    transitions: list[Transition] = []
+def _transitions_for_episodes(lengths: list[int]):
+    transitions = []
     for episode_id, length in enumerate(lengths):
         for _ in range(length):
-            transitions.append(
-                Transition(
-                    state=np.zeros(107),
-                    action=np.zeros(8, dtype=np.float32),
-                    next_state=np.zeros(107),
-                    goal=np.zeros(2),
-                    episode_id=episode_id,
-                )
-            )
+            transitions.append(make_transition(episode_id=episode_id))
     return transitions
 
 
@@ -87,17 +80,51 @@ def test_split_episode_single_episode_raises() -> None:
 
 
 def test_no_change_baseline_mse() -> None:
-    states = np.zeros((5, 107))
-    next_states = np.zeros((5, 107))
+    states = np.zeros((5, STATE_DIM))
+    next_states = np.zeros((5, STATE_DIM))
     next_states[:, 0] = 2.0
     mse = no_change_baseline_mse(states, next_states)
-    expected = (2.0**2) / 107
+    expected = (2.0**2) / STATE_DIM
     assert abs(mse - expected) < 1e-8
 
 
 def test_next_position_mse() -> None:
-    pred = np.zeros((3, 107))
-    target = np.zeros((3, 107))
+    pred = np.zeros((3, STATE_DIM))
+    target = np.zeros((3, STATE_DIM))
     pred[:, 0] = 2.0
     mse = next_position_mse(pred, target)
     assert abs(mse - 2.0) < 1e-8
+
+
+def test_dynamics_normalizer_fit_on_train_episodes_only() -> None:
+    """Mean of the fitted normalizer must come from train episodes, not val."""
+    from hwm_director.models.dynamics_low import LowLevelDynamicsModel
+    from hwm_director.training.train_dynamics import train_low_level_dynamics
+
+    train_ep = []
+    val_ep = []
+    for _ in range(4):
+        state = np.full(STATE_DIM, 10.0)
+        next_state = np.full(STATE_DIM, 10.5)
+        train_ep.append(make_transition(episode_id=0, state=state, next_state=next_state))
+        vstate = np.full(STATE_DIM, -10.0)
+        vnext = np.full(STATE_DIM, -9.5)
+        val_ep.append(make_transition(episode_id=1, state=vstate, next_state=vnext))
+    metrics = train_low_level_dynamics(
+        train_ep + val_ep,
+        model=LowLevelDynamicsModel(hidden_dims=(8,)),
+        val_fraction=0.5,
+        seed=0,
+        batch_size=4,
+        epochs=1,
+        lr=1e-3,
+    )
+    train_ids = set(metrics["train_episode_ids"])
+    val_ids = set(metrics["val_episode_ids"])
+    assert train_ids.isdisjoint(val_ids)
+    mean0 = float(metrics["normalizer"].mean[0])
+    if train_ids == {0}:
+        assert abs(mean0 - 10.0) < 1e-6
+    else:
+        assert abs(mean0 - (-10.0)) < 1e-6
+

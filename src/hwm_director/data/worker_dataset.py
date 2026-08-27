@@ -39,9 +39,9 @@ DEFAULT_HORIZON_K = 10
 class WorkerExample(NamedTuple):
     """One BC sample for ``pi_L(s_t, g_tau) -> a_t``."""
 
-    state: np.ndarray  # (107,)
-    subgoal: np.ndarray  # (2,)
-    action: np.ndarray  # (8,)
+    state: np.ndarray  # (STATE_DIM,)
+    subgoal: np.ndarray  # (ACHIEVED_GOAL_DIM,)
+    action: np.ndarray  # (ACTION_DIM,)
     offset: int  # k >= 1
 
 
@@ -53,7 +53,7 @@ def normalize_subgoal(xy: np.ndarray, normalizer: StateNormalizer) -> np.ndarray
     xy:
         ``(2,)`` or ``(N, 2)``.
     normalizer:
-        Already ``fit`` on **training** states of shape ``(N, 107)``.
+        Already ``fit`` on **training** states of shape ``(N, STATE_DIM)``.
     """
     if normalizer.mean is None or normalizer.std is None:
         raise ValueError("fit() must be called before normalize_subgoal()")
@@ -81,9 +81,9 @@ class WorkerDataset(Dataset):
 
     Each item is a dict of float32 tensors:
 
-    - ``state``: ``(107,)``
-    - ``subgoal``: ``(2,)``
-    - ``action``: ``(8,)``  (not normalized; already in [-1, 1])
+    - ``state``: ``(STATE_DIM,)``
+    - ``subgoal``: ``(ACHIEVED_GOAL_DIM,)``
+    - ``action``: ``(ACTION_DIM,)``  (not normalized; already in [-1, 1])
     """
 
     def __init__(

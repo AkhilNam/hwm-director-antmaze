@@ -55,10 +55,9 @@ def split_episode_indices(
         raise ValueError(
             "Need at least 2 unique episodes for a train/val split, "
             f"got {n_episodes} from {n} transitions. "
-            "AntMaze_UMaze-v5 episodes often run ~700 steps, so "
-            "--n-transitions 256 is usually a single unfinished episode. "
-            "Use at least ~1500–5000 transitions (or more) so collection "
-            "covers two resets."
+            "AntMaze_UMaze-v4 / Minari umaze-v1 episodes often run ~700 "
+            "steps, so a tiny --max-transitions budget can be a single "
+            "unfinished episode. Use at least two full episodes."
         )
 
     n_val = int(round(n_episodes * val_fraction))
@@ -87,7 +86,7 @@ def no_change_baseline_mse(
     Parameters
     ----------
     states, next_states:
-        Shape ``(N, 107)``.
+        Shape ``(N, STATE_DIM)``.
 
     Returns
     -------
@@ -105,7 +104,7 @@ def next_position_mse(
     Parameters
     ----------
     predicted_next_states, next_states:
-        Shape ``(N, 107)``.
+        Shape ``(N, STATE_DIM)``.
     """
     return float(
         np.mean((predicted_next_states[:, :2] - next_states[:, :2]) ** 2)

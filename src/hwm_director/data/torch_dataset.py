@@ -19,9 +19,9 @@ class TransitionDataset(Dataset):
 
     Each ``__getitem__`` returns a dict of 1-D float32 tensors:
 
-    - ``state``: ``(107,)``
-    - ``action``: ``(8,)``
-    - ``next_state``: ``(107,)``
+    - ``state``: ``(STATE_DIM,)``
+    - ``action``: ``(ACTION_DIM,)``
+    - ``next_state``: ``(STATE_DIM,)``
     """
 
     def __init__(self, transitions: Sequence[Transition]) -> None:
@@ -51,7 +51,7 @@ class TransitionDataset(Dataset):
         -------
         dict
             Keys ``state``, ``action``, ``next_state`` with shapes
-            ``(107,)``, ``(8,)``, ``(107,)``.
+            ``(STATE_DIM,)``, ``(ACTION_DIM,)``, ``(STATE_DIM,)``.
         """
         return {
             "state": self.states[index],

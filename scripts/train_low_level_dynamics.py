@@ -1,27 +1,39 @@
 #!/usr/bin/env python3
-"""Train one-step low-level dynamics ``f_L`` on random AntMaze transitions."""
+"""Train one-step low-level dynamics ``f_L`` on Minari AntMaze transitions.
+
+Default data: ``D4RL/antmaze/umaze-v1``. Random rollouts are not used here;
+see ``scripts/collect_random_transitions.py`` only as a smoke-test utility.
+"""
 
 from __future__ import annotations
 
 import argparse
-import sys
-from pathlib import Path
 
+from hwm_director.data.minari_antmaze import (
+    DEFAULT_MINARI_DATASET_ID,
+    load_minari_transitions,
+)
 from hwm_director.models.dynamics_low import LowLevelDynamicsModel
 from hwm_director.training.train_dynamics import train_low_level_dynamics
 
-_SCRIPTS_DIR = Path(__file__).resolve().parent
-if str(_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS_DIR))
-from collect_random_transitions import collect_random_transitions  # noqa: E402
-
 SEED = 0
-N_TRANSITIONS = 5000
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--n-transitions", type=int, default=N_TRANSITIONS)
+    parser.add_argument("--dataset-id", default=DEFAULT_MINARI_DATASET_ID)
+    parser.add_argument(
+        "--max-episodes",
+        type=int,
+        default=None,
+        help="optional cap on Minari episodes (debug)",
+    )
+    parser.add_argument(
+        "--max-transitions",
+        type=int,
+        default=None,
+        help="optional cap on converted transitions (debug)",
+    )
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--val-fraction", type=float, default=0.2)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -41,9 +53,22 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    transitions = collect_random_transitions(args.n_transitions, args.seed)
+    transitions = load_minari_transitions(
+        args.dataset_id,
+        max_episodes=args.max_episodes,
+        max_transitions=args.max_transitions,
+    )
     n_episodes = len({t.episode_id for t in transitions})
-    print(f"collected {len(transitions)} transitions across {n_episodes} episodes")
+    print(
+        f"loaded {len(transitions)} transitions across {n_episodes} episodes "
+        f"from {args.dataset_id}"
+    )
+    if transitions:
+        t0 = transitions[0]
+        print(
+            f"  state={t0.state.shape} action={t0.action.shape} "
+            f"next_state={t0.next_state.shape} goal={t0.goal.shape}"
+        )
 
     model = LowLevelDynamicsModel(hidden_dims=tuple(args.hidden_dims))
     metrics = train_low_level_dynamics(

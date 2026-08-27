@@ -16,7 +16,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from hwm_director.data.normalization import StateNormalizer
-from hwm_director.data.state import extract_state_and_goal
+from hwm_director.data.state import STATE_DIM, extract_state_and_goal
 from hwm_director.data.trajectories import group_by_episode
 from hwm_director.data.transitions import Transition
 from hwm_director.data.worker_dataset import (
@@ -24,7 +24,11 @@ from hwm_director.data.worker_dataset import (
     WorkerDataset,
     normalize_subgoal,
 )
-from hwm_director.envs.antmaze import make_antmaze
+from hwm_director.envs.antmaze import (
+    DEFAULT_ENV_ID,
+    make_antmaze,
+    recover_minari_environment,
+)
 from hwm_director.models.worker import GoalConditionedWorker
 from hwm_director.training.train_dynamics import split_episode_indices
 
@@ -70,9 +74,17 @@ def _predict_actions(
 DEFAULT_MIN_SUBGOAL_DISTANCE = 0.5
 DEFAULT_MAX_SUBGOAL_DISTANCE = 2.0
 XY_RESTORE_TOL = 1e-4
-# 107-D layout: [xy (2), Ant-v5 proprio (27) = qpos[2:]+qvel, cfrc_ext (78)].
-PROPRIO_SLICE = slice(2, 29)
-CONTACT_SLICE = slice(29, 107)
+# 29-D Ant-v4 layout: [xy (2), observation (27) = qpos[2:] + qvel].
+# There are no contact-force channels.
+PROPRIO_SLICE = slice(2, STATE_DIM)
+
+CLOSED_LOOP_EVAL_TODO = (
+    "TODO: replace qpos/qvel restore with a valid offline/online closed-loop "
+    "evaluation that does not invent MuJoCo state. Options include (1) an "
+    "online AntMaze_UMaze-v4 rollout from env.reset with a goal-conditioned "
+    "success metric, or (2) using a dataset that stores exact simulator "
+    "state in infos. Do not approximate restore from an incomplete state."
+)
 
 
 class SubgoalCandidate(NamedTuple):
@@ -178,13 +190,23 @@ def summarize_subgoal_eval(
     }
 
 
+def transitions_have_simulator_state(transitions: Sequence[Transition]) -> bool:
+    """True iff every transition has both ``qpos`` and ``qvel``."""
+    if not transitions:
+        return False
+    return all(t.qpos is not None and t.qvel is not None for t in transitions)
+
+
 def restore_ant_state(env, qpos: np.ndarray, qvel: np.ndarray) -> dict:
     """Restore the recorded MuJoCo configuration and return a maze observation.
 
     Closed-loop eval must start from the **same physical pose** as ``s_t``.
     Writing only torso x/y onto a fresh reset leaves joints, height, and
     velocities at the default standing pose, so ``pi_L`` sees a different
-    107-D state than the one it was cloned from.
+    29-D state than the one it was cloned from.
+
+    This path is valid only when ``qpos``/``qvel`` are exact (stored in the
+    dataset or reconstructed from Ant-v4 via ``ant_v4_qpos_qvel_from_state``).
     """
     maze = env.unwrapped
     ant = maze.ant_env
@@ -198,12 +220,11 @@ def restore_ant_state(env, qpos: np.ndarray, qvel: np.ndarray) -> dict:
 def restored_state_diagnostics(
     reconstructed_state: np.ndarray, recorded_state: np.ndarray
 ) -> dict:
-    """Compare restored 107-D state to the recorded vector.
+    """Compare restored 29-D state to the recorded vector.
 
-    x/y and proprioception (z, orientation, joints, qvel) should match after
-    ``set_state``. Contact-force channels ``state[29:107]`` (Ant-v5 ``cfrc_ext``)
-    can differ because they depend on the last collision resolution, not only
-    on qpos/qvel. Those 78 dims are documented, not silently treated as equal.
+    For Ant-v4, the full observation is proprioception (``qpos[2:]`` and
+    ``qvel``). After ``set_state``, x/y and that 27-D body vector should
+    match. There are no contact-force channels in this representation.
     """
     reconstructed_state = np.asarray(reconstructed_state, dtype=np.float64)
     recorded_state = np.asarray(recorded_state, dtype=np.float64)
@@ -215,13 +236,6 @@ def restored_state_diagnostics(
             np.max(
                 np.abs(
                     reconstructed_state[PROPRIO_SLICE] - recorded_state[PROPRIO_SLICE]
-                )
-            )
-        ),
-        "contact_abs_err": float(
-            np.max(
-                np.abs(
-                    reconstructed_state[CONTACT_SLICE] - recorded_state[CONTACT_SLICE]
                 )
             )
         ),
@@ -296,7 +310,7 @@ def train_goal_conditioned_worker(
     Workflow:
 
     1. ``split_episode_indices`` (whole episodes).
-    2. Fit ``StateNormalizer`` on train states only ``(N_train, 107)``.
+    2. Fit ``StateNormalizer`` on train states only ``(N_train, STATE_DIM)``.
     3. ``WorkerDataset(..., horizon_k, normalizer)`` on train and on val.
     4. Adam + MSE on predicted vs recorded actions.
     5. Report train/val action MSE and zero-action val MSE.
@@ -411,6 +425,28 @@ def _rollout_from_restored(
     return float(np.linalg.norm(achieved[:2] - subgoal_xy))
 
 
+def skipped_closed_loop_eval(
+    reason: str, success_threshold: float = 0.5
+) -> dict:
+    """Placeholder metrics when qpos/qvel restore is not scientifically valid."""
+    empty_metrics = summarize_subgoal_eval(
+        np.zeros(0), np.zeros(0), success_threshold
+    )
+    return {
+        "skipped": True,
+        "skip_reason": reason,
+        "todo": CLOSED_LOOP_EVAL_TODO,
+        "worker": dict(empty_metrics),
+        "zero": dict(empty_metrics),
+        "random": dict(empty_metrics),
+        "n_candidates": 0,
+        "n_trials": 0,
+        "candidate_indices": [],
+        "n_restores": 0,
+        "trials": [],
+    }
+
+
 def evaluate_worker_on_recorded_subgoals(
     transitions: Sequence[Transition],
     model: GoalConditionedWorker,
@@ -422,17 +458,26 @@ def evaluate_worker_on_recorded_subgoals(
     max_distance: float = DEFAULT_MAX_SUBGOAL_DISTANCE,
     seed: int = 0,
     verbose: bool = False,
+    *,
+    dataset_id: str | None = None,
+    env_id: str = DEFAULT_ENV_ID,
 ) -> dict:
     """Compare worker / zero / random on the **same** restored (s_t, g, k) trials.
 
     Candidate indices are sampled once. Each controller then gets its own
     ``reset`` + ``qpos``/``qvel`` restore so rollouts cannot contaminate each
     other. Random actions come from the seeded NumPy Generator.
+
+    If any transition is missing ``qpos``/``qvel``, this path is **skipped**
+    rather than approximated. See ``CLOSED_LOOP_EVAL_TODO``.
     """
     empty_metrics = summarize_subgoal_eval(
         np.zeros(0), np.zeros(0), success_threshold
     )
     empty = {
+        "skipped": False,
+        "skip_reason": "",
+        "todo": "",
         "worker": dict(empty_metrics),
         "zero": dict(empty_metrics),
         "random": dict(empty_metrics),
@@ -445,6 +490,17 @@ def evaluate_worker_on_recorded_subgoals(
     if n_trials <= 0:
         return empty
 
+    if not transitions_have_simulator_state(transitions):
+        reason = (
+            "Closed-loop worker eval requires exact MuJoCo qpos/qvel on every "
+            "transition. These transitions do not provide it, so the restore "
+            "path is disabled rather than approximated from the 29-D state."
+        )
+        if verbose:
+            print(reason)
+            print(CLOSED_LOOP_EVAL_TODO)
+        return skipped_closed_loop_eval(reason, success_threshold)
+
     candidates = subgoal_candidates(
         transitions,
         horizon_k=horizon_k,
@@ -455,9 +511,7 @@ def evaluate_worker_on_recorded_subgoals(
         raise ValueError(
             "No eligible subgoal candidates in these trajectories. "
             f"Need in-episode offsets 1..{horizon_k} with initial x/y distance "
-            f"in [{min_distance}, {max_distance}] m. Random short rollouts "
-            "often stay closer than min_distance; collect longer/more diverse "
-            "trajectories or relax the distance window."
+            f"in [{min_distance}, {max_distance}] m."
         )
 
     rng = np.random.default_rng(seed)
@@ -469,16 +523,20 @@ def evaluate_worker_on_recorded_subgoals(
     }
     trials: list[dict] = []
     n_restores = 0
-    env = make_antmaze()
+    if dataset_id is not None:
+        env = recover_minari_environment(dataset_id)
+    else:
+        env = make_antmaze(env_id)
     try:
         for trial_i, cand_i in enumerate(picks):
             cand = candidates[int(cand_i)]
             start = cand.traj[cand.t]
             if start.qpos is None or start.qvel is None:
-                raise ValueError(
-                    "Transition is missing qpos/qvel; recollect transitions "
-                    "with the updated collector before closed-loop eval."
+                reason = (
+                    "A sampled trial is missing qpos/qvel; refusing to invent "
+                    "simulator state for closed-loop eval."
                 )
+                return skipped_closed_loop_eval(reason, success_threshold)
             trial_record: dict = {
                 "episode_id": int(start.episode_id),
                 "t": int(cand.t),
@@ -532,6 +590,9 @@ def evaluate_worker_on_recorded_subgoals(
         env.close()
 
     result = {
+        "skipped": False,
+        "skip_reason": "",
+        "todo": "",
         "n_candidates": len(candidates),
         "n_trials": int(picks.size),
         "candidate_indices": [int(i) for i in picks],

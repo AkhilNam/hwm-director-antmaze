@@ -5,28 +5,29 @@ from __future__ import annotations
 import numpy as np
 
 from hwm_director.data.normalization import StateNormalizer
+from hwm_director.data.state import STATE_DIM
 
 
 def test_normalize_preserves_batch_shape() -> None:
     rng = np.random.default_rng(0)
-    states = rng.normal(size=(16, 107))
+    states = rng.normal(size=(16, STATE_DIM))
     normalizer = StateNormalizer(eps=1e-8).fit(states)
     out = normalizer.normalize(states)
-    assert out.shape == (16, 107)
+    assert out.shape == (16, STATE_DIM)
 
 
 def test_normalize_preserves_vector_shape() -> None:
     rng = np.random.default_rng(1)
-    states = rng.normal(size=(8, 107))
+    states = rng.normal(size=(8, STATE_DIM))
     vector = states[0]
     normalizer = StateNormalizer().fit(states)
     out = normalizer.normalize(vector)
-    assert out.shape == (107,)
+    assert out.shape == (STATE_DIM,)
 
 
 def test_normalizer_round_trip() -> None:
     rng = np.random.default_rng(2)
-    states = rng.normal(loc=3.0, scale=2.0, size=(32, 107))
+    states = rng.normal(loc=3.0, scale=2.0, size=(32, STATE_DIM))
     states[:, 0] = 5.0
     normalizer = StateNormalizer(eps=1e-8).fit(states)
     recovered = normalizer.denormalize(normalizer.normalize(states))

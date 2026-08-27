@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""Train the shared low-level worker ``pi_L(s_t, g_tau) -> a_t``."""
+"""Train the shared low-level worker ``pi_L(s_t, g_tau) -> a_t``.
+
+Default data: Minari ``D4RL/antmaze/umaze-v1``. Random rollouts are not used
+here; see ``scripts/collect_random_transitions.py`` only as a smoke-test
+utility.
+"""
 
 from __future__ import annotations
 
 import argparse
-import sys
-from pathlib import Path
 
+from hwm_director.data.minari_antmaze import (
+    DEFAULT_MINARI_DATASET_ID,
+    load_minari_transitions,
+)
 from hwm_director.data.worker_dataset import DEFAULT_HORIZON_K
 from hwm_director.models.worker import GoalConditionedWorker
 from hwm_director.training.train_worker import (
@@ -16,23 +23,23 @@ from hwm_director.training.train_worker import (
     train_goal_conditioned_worker,
 )
 
-_SCRIPTS_DIR = Path(__file__).resolve().parent
-if str(_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS_DIR))
-from collect_random_transitions import collect_random_transitions  # noqa: E402
-
 SEED = 0
-N_TRANSITIONS = 5000
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dataset-id", default=DEFAULT_MINARI_DATASET_ID)
     parser.add_argument(
-        "--n-transitions",
+        "--max-episodes",
         type=int,
-        default=N_TRANSITIONS,
-        help="one-step tuples to collect (need enough for >= 2 episodes; "
-        "UMaze episodes are often ~700 steps)",
+        default=None,
+        help="optional cap on Minari episodes (debug)",
+    )
+    parser.add_argument(
+        "--max-transitions",
+        type=int,
+        default=None,
+        help="optional cap on converted transitions (debug)",
     )
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--val-fraction", type=float, default=0.2)
@@ -83,9 +90,22 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    transitions = collect_random_transitions(args.n_transitions, args.seed)
+    transitions = load_minari_transitions(
+        args.dataset_id,
+        max_episodes=args.max_episodes,
+        max_transitions=args.max_transitions,
+    )
     n_episodes = len({t.episode_id for t in transitions})
-    print(f"collected {len(transitions)} transitions across {n_episodes} episodes")
+    print(
+        f"loaded {len(transitions)} transitions across {n_episodes} episodes "
+        f"from {args.dataset_id}"
+    )
+    if transitions:
+        t0 = transitions[0]
+        print(
+            f"  state={t0.state.shape} action={t0.action.shape} "
+            f"next_state={t0.next_state.shape} goal={t0.goal.shape}"
+        )
 
     model = GoalConditionedWorker(hidden_dims=tuple(args.hidden_dims))
     metrics = train_goal_conditioned_worker(
@@ -137,7 +157,14 @@ def main() -> None:
             max_distance=args.max_subgoal_distance,
             seed=args.seed,
             verbose=args.verbose,
+            dataset_id=args.dataset_id,
         )
+        if eval_metrics.get("skipped"):
+            print("=== closed-loop controller comparison ===")
+            print("  SKIPPED: exact MuJoCo restore is unavailable.")
+            print(f"  reason: {eval_metrics['skip_reason']}")
+            print(f"  {eval_metrics['todo']}")
+            return
         print("=== closed-loop controller comparison ===")
         print(f"  n_candidates: {eval_metrics['n_candidates']}")
         print(f"  n_trials: {eval_metrics['n_trials']}")
