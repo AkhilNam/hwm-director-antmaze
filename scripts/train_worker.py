@@ -138,29 +138,26 @@ def main() -> None:
             seed=args.seed,
             verbose=args.verbose,
         )
-        print("=== pi_L subgoal eval ===")
+        print("=== closed-loop controller comparison ===")
         print(f"  n_candidates: {eval_metrics['n_candidates']}")
         print(f"  n_trials: {eval_metrics['n_trials']}")
-        print(f"  mean initial distance (m): {eval_metrics['mean_initial_distance']:.6f}")
-        print(f"  mean final distance (m): {eval_metrics['mean_final_distance']:.6f}")
-        print(f"  mean distance reduction (m): {eval_metrics['mean_distance_reduction']:.6f}")
-        print(f"  median distance reduction (m): {eval_metrics['median_distance_reduction']:.6f}")
-        print(f"  progress fraction: {eval_metrics['progress_fraction']:.6f}")
+        for name in ("worker", "zero", "random"):
+            block = eval_metrics[name]
+            print(f"{name}:")
+            print(f"  mean final distance: {block['mean_final_distance']:.6f}")
+            print(f"  mean distance reduction: {block['mean_distance_reduction']:.6f}")
+            print(f"  progress fraction: {block['progress_fraction']:.6f}")
+            print(f"  success rate: {block['success_rate']:.6f}")
+        worker_final = eval_metrics["worker"]["mean_final_distance"]
+        zero_final = eval_metrics["zero"]["mean_final_distance"]
+        random_final = eval_metrics["random"]["mean_final_distance"]
         print(
-            "  fraction positive reduction: "
-            f"{eval_metrics['fraction_positive_reduction']:.6f}"
+            "worker improvement over zero: "
+            f"{zero_final - worker_final:.6f}"
         )
         print(
-            "  fraction >=10% relative progress: "
-            f"{eval_metrics['fraction_relative_progress_10']:.6f}"
-        )
-        print(
-            "  fraction already successful at start: "
-            f"{eval_metrics['fraction_already_successful_at_start']:.6f}"
-        )
-        print(
-            f"  success rate (final < {args.success_threshold} m): "
-            f"{eval_metrics['success_rate']:.6f}"
+            "worker improvement over random: "
+            f"{random_final - worker_final:.6f}"
         )
 
 

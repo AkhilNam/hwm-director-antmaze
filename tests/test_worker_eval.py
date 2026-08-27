@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import numpy as np
 
+from hwm_director.data.normalization import StateNormalizer
 from hwm_director.data.state import extract_state_and_goal
 from hwm_director.data.transitions import Transition
 from hwm_director.envs.antmaze import make_antmaze
+from hwm_director.models.worker import GoalConditionedWorker
 from hwm_director.training.train_worker import (
     choose_unique_trial_indices,
+    controller_action,
+    evaluate_worker_on_recorded_subgoals,
     restore_ant_state,
     restored_state_diagnostics,
     subgoal_candidates,
@@ -120,3 +124,78 @@ def test_restore_ant_state_matches_recorded_xy() -> None:
         assert diag["proprio_abs_err"] < 1e-4
     finally:
         env.close()
+
+
+def test_zero_controller_is_zeros() -> None:
+    action = controller_action("zero")
+    assert action.shape == (8,)
+    assert action.dtype == np.float32
+    np.testing.assert_array_equal(action, np.zeros(8, dtype=np.float32))
+
+
+def test_random_controller_shape_bounds_and_seed() -> None:
+    a = controller_action("random", rng=np.random.default_rng(0))
+    b = controller_action("random", rng=np.random.default_rng(0))
+    c = controller_action("random", rng=np.random.default_rng(1))
+    assert a.shape == (8,)
+    assert np.all(a >= -1.0) and np.all(a <= 1.0)
+    np.testing.assert_array_equal(a, b)
+    assert not np.array_equal(a, c)
+
+
+def test_empty_eval_has_three_controller_metrics() -> None:
+    model = GoalConditionedWorker(hidden_dims=(8,))
+    normalizer = StateNormalizer().fit(np.zeros((2, 107)))
+    result = evaluate_worker_on_recorded_subgoals(
+        [], model, normalizer, n_trials=0
+    )
+    for name in ("worker", "zero", "random"):
+        assert "mean_final_distance" in result[name]
+        assert "success_rate" in result[name]
+    assert result["n_trials"] == 0
+    assert result["candidate_indices"] == []
+
+
+def test_three_controllers_share_candidates_and_restore_each_rollout() -> None:
+    env = make_antmaze()
+    try:
+        observation, _info = env.reset(seed=0)
+        ant = env.unwrapped.ant_env
+        qpos = np.array(ant.data.qpos, copy=True)
+        qvel = np.array(ant.data.qvel, copy=True)
+        recorded, goal = extract_state_and_goal(observation)
+    finally:
+        env.close()
+
+    next_state = np.array(recorded, copy=True)
+    next_state[0] = recorded[0] + 0.7
+    transition = Transition(
+        state=recorded,
+        action=np.zeros(8, dtype=np.float32),
+        next_state=next_state,
+        goal=goal,
+        episode_id=0,
+        qpos=qpos,
+        qvel=qvel,
+    )
+    model = GoalConditionedWorker(hidden_dims=(8,))
+    normalizer = StateNormalizer().fit(np.stack([recorded, next_state]))
+    result = evaluate_worker_on_recorded_subgoals(
+        [transition],
+        model,
+        normalizer,
+        horizon_k=1,
+        n_trials=5,
+        min_distance=0.5,
+        max_distance=2.0,
+        seed=0,
+    )
+    assert result["n_trials"] == 1
+    assert result["n_restores"] == 3
+    assert result["candidate_indices"] == [0]
+    for name in ("worker", "zero", "random"):
+        assert result[name]["n_trials"] == 1
+        assert np.isfinite(result[name]["mean_final_distance"])
+    trial = result["trials"][0]
+    assert trial["candidate_index"] == 0
+    assert "worker" in trial and "zero" in trial and "random" in trial

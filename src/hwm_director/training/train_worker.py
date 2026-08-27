@@ -237,6 +237,35 @@ def _assert_xy_restored(reconstructed_state: np.ndarray, recorded_state: np.ndar
         )
 
 
+CONTROLLER_TYPES = ("worker", "zero", "random")
+
+
+def controller_action(
+    controller_type: str,
+    *,
+    model: GoalConditionedWorker | None = None,
+    normalizer: StateNormalizer | None = None,
+    state: np.ndarray | None = None,
+    subgoal_xy: np.ndarray | None = None,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """Return an 8-D action in ``[-1, 1]`` for ``worker``, ``zero``, or ``random``."""
+    if controller_type == "worker":
+        if model is None or normalizer is None or state is None or subgoal_xy is None:
+            raise ValueError("worker controller requires model, normalizer, state, subgoal")
+        return _worker_action(model, normalizer, state, subgoal_xy)
+    if controller_type == "zero":
+        return np.zeros(8, dtype=np.float32)
+    if controller_type == "random":
+        if rng is None:
+            raise ValueError("random controller requires a seeded numpy Generator")
+        return rng.uniform(-1.0, 1.0, size=8).astype(np.float32)
+    raise ValueError(
+        f"Unknown controller_type {controller_type!r}; "
+        f"expected one of {CONTROLLER_TYPES}"
+    )
+
+
 def _worker_action(
     model: GoalConditionedWorker,
     normalizer: StateNormalizer,
@@ -348,6 +377,40 @@ def train_goal_conditioned_worker(
     }
 
 
+def _reset_and_restore(env, seed: int, qpos: np.ndarray, qvel: np.ndarray) -> dict:
+    """Reset the wrapper, then restore the recorded physical pose."""
+    env.reset(seed=seed)
+    return restore_ant_state(env, qpos, qvel)
+
+
+def _rollout_from_restored(
+    env,
+    observation: dict,
+    controller_type: str,
+    k: int,
+    subgoal_xy: np.ndarray,
+    model: GoalConditionedWorker,
+    normalizer: StateNormalizer,
+    rng: np.random.Generator,
+) -> float:
+    """Step ``k`` times; return final distance to ``subgoal_xy``."""
+    for _ in range(k):
+        state, _ = extract_state_and_goal(observation)
+        action = controller_action(
+            controller_type,
+            model=model,
+            normalizer=normalizer,
+            state=state,
+            subgoal_xy=subgoal_xy,
+            rng=rng,
+        )
+        observation, _reward, terminated, truncated, _info = env.step(action)
+        if terminated or truncated:
+            break
+    achieved, _ = extract_state_and_goal(observation)
+    return float(np.linalg.norm(achieved[:2] - subgoal_xy))
+
+
 def evaluate_worker_on_recorded_subgoals(
     transitions: Sequence[Transition],
     model: GoalConditionedWorker,
@@ -360,18 +423,25 @@ def evaluate_worker_on_recorded_subgoals(
     seed: int = 0,
     verbose: bool = False,
 ) -> dict:
-    """Roll ``pi_L`` toward a nontrivial future x/y from recorded trajectories.
+    """Compare worker / zero / random on the **same** restored (s_t, g, k) trials.
 
-    Restores recorded ``qpos``/``qvel`` so the worker starts in the true
-    physical pose, not a reset ant with only x/y overwritten. Subgoals are
-    filtered to ``[min_distance, max_distance]`` meters. Trials are unique
-    ``(episode, t, k)`` pairs (no replacement).
+    Candidate indices are sampled once. Each controller then gets its own
+    ``reset`` + ``qpos``/``qvel`` restore so rollouts cannot contaminate each
+    other. Random actions come from the seeded NumPy Generator.
     """
-    empty = summarize_subgoal_eval(
+    empty_metrics = summarize_subgoal_eval(
         np.zeros(0), np.zeros(0), success_threshold
     )
-    empty["n_candidates"] = 0
-    empty["trials"] = []
+    empty = {
+        "worker": dict(empty_metrics),
+        "zero": dict(empty_metrics),
+        "random": dict(empty_metrics),
+        "n_candidates": 0,
+        "n_trials": 0,
+        "candidate_indices": [],
+        "n_restores": 0,
+        "trials": [],
+    }
     if n_trials <= 0:
         return empty
 
@@ -394,9 +464,11 @@ def evaluate_worker_on_recorded_subgoals(
     picks = choose_unique_trial_indices(len(candidates), n_trials, rng)
     model.eval()
 
-    initials: list[float] = []
-    finals: list[float] = []
+    per_ctrl: dict[str, dict[str, list[float]]] = {
+        name: {"initials": [], "finals": []} for name in CONTROLLER_TYPES
+    }
     trials: list[dict] = []
+    n_restores = 0
     env = make_antmaze()
     try:
         for trial_i, cand_i in enumerate(picks):
@@ -407,56 +479,69 @@ def evaluate_worker_on_recorded_subgoals(
                     "Transition is missing qpos/qvel; recollect transitions "
                     "with the updated collector before closed-loop eval."
                 )
-            observation, _info = env.reset(seed=int(seed + trial_i))
-            observation = restore_ant_state(env, start.qpos, start.qvel)
-            reconstructed, _ = extract_state_and_goal(observation)
-            _assert_xy_restored(reconstructed, start.state)
-
-            initial = float(np.linalg.norm(reconstructed[:2] - cand.subgoal_xy))
-            started_inside = initial < success_threshold
-
-            for _ in range(cand.k):
-                state, _ = extract_state_and_goal(observation)
-                action = _worker_action(
-                    model, normalizer, state, cand.subgoal_xy
-                )
-                observation, _reward, terminated, truncated, _info = env.step(
-                    action
-                )
-                if terminated or truncated:
-                    break
-
-            achieved, _ = extract_state_and_goal(observation)
-            final = float(np.linalg.norm(achieved[:2] - cand.subgoal_xy))
-            reduction = initial - final
-            ended_success = final < success_threshold
-            record = {
+            trial_record: dict = {
                 "episode_id": int(start.episode_id),
                 "t": int(cand.t),
                 "k": int(cand.k),
-                "initial_distance": initial,
-                "final_distance": final,
-                "distance_reduction": reduction,
-                "started_inside_success_radius": started_inside,
-                "ended_successful": ended_success,
+                "candidate_index": int(cand_i),
             }
-            if verbose:
-                print(
-                    "  trial "
-                    f"ep={record['episode_id']} t={record['t']} k={record['k']} "
-                    f"init={initial:.4f} final={final:.4f} "
-                    f"d={reduction:.4f} start_ok={started_inside} "
-                    f"end_ok={ended_success}"
+            for controller_type in CONTROLLER_TYPES:
+                observation = _reset_and_restore(
+                    env,
+                    seed=int(seed + trial_i),
+                    qpos=start.qpos,
+                    qvel=start.qvel,
                 )
-            initials.append(initial)
-            finals.append(final)
-            trials.append(record)
+                n_restores += 1
+                reconstructed, _ = extract_state_and_goal(observation)
+                _assert_xy_restored(reconstructed, start.state)
+                initial = float(
+                    np.linalg.norm(reconstructed[:2] - cand.subgoal_xy)
+                )
+                final = _rollout_from_restored(
+                    env,
+                    observation,
+                    controller_type,
+                    cand.k,
+                    cand.subgoal_xy,
+                    model,
+                    normalizer,
+                    rng,
+                )
+                per_ctrl[controller_type]["initials"].append(initial)
+                per_ctrl[controller_type]["finals"].append(final)
+                trial_record[controller_type] = {
+                    "initial_distance": initial,
+                    "final_distance": final,
+                    "distance_reduction": initial - final,
+                    "started_inside_success_radius": initial < success_threshold,
+                    "ended_successful": final < success_threshold,
+                }
+            trials.append(trial_record)
+            if verbose:
+                init = trial_record["worker"]["initial_distance"]
+                print(f"trial ep={trial_record['episode_id']} t={trial_record['t']} k={trial_record['k']}")
+                print(f"  init={init:.4f}")
+                for name in CONTROLLER_TYPES:
+                    rec = trial_record[name]
+                    print(
+                        f"  {name} final={rec['final_distance']:.4f} "
+                        f"d={rec['distance_reduction']:.4f}"
+                    )
     finally:
         env.close()
 
-    summary = summarize_subgoal_eval(
-        np.asarray(initials), np.asarray(finals), success_threshold
-    )
-    summary["n_candidates"] = len(candidates)
-    summary["trials"] = trials
-    return summary
+    result = {
+        "n_candidates": len(candidates),
+        "n_trials": int(picks.size),
+        "candidate_indices": [int(i) for i in picks],
+        "n_restores": n_restores,
+        "trials": trials,
+    }
+    for name in CONTROLLER_TYPES:
+        result[name] = summarize_subgoal_eval(
+            np.asarray(per_ctrl[name]["initials"]),
+            np.asarray(per_ctrl[name]["finals"]),
+            success_threshold,
+        )
+    return result
