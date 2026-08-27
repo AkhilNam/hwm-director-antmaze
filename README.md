@@ -88,6 +88,29 @@ python scripts/train_worker.py --horizon-k 10
 python scripts/train_worker.py --max-episodes 8 --epochs 5 --n-eval-trials 0
 ```
 
+## Current results
+
+Minari `D4RL/antmaze/umaze-v1`, episode-level train/val split.
+
+### One-step world model $f_L$
+
+- Validation MSE: 0.0219
+- No-change baseline MSE: 0.6163
+- Validation $x,y$ MSE: 0.0033
+
+### Goal-conditioned worker $\pi_L$
+
+- Validation action MSE: 0.0876
+- Zero-action baseline MSE: 0.5737
+
+Closed-loop subgoal evaluation:
+
+- Worker final distance: 0.128 m
+- Zero-action final distance: 0.272 m
+- Random-action final distance: 0.275 m
+- Worker success rate: 100%
+- Zero/random success rate: 85%
+
 ## Scripts
 
 ```bash
