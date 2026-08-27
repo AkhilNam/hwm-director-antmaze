@@ -43,7 +43,13 @@ def main() -> None:
     )
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--val-fraction", type=float, default=0.2)
-    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=4096,
+        help="BC minibatch size (4096 is appropriate for the full 1e6-step "
+        "Minari corpus; K=10 yields ~10 examples per step)",
+    )
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument(
@@ -98,13 +104,20 @@ def main() -> None:
     n_episodes = len({t.episode_id for t in transitions})
     print(
         f"loaded {len(transitions)} transitions across {n_episodes} episodes "
-        f"from {args.dataset_id}"
+        f"from {args.dataset_id}",
+        flush=True,
     )
     if transitions:
         t0 = transitions[0]
         print(
             f"  state={t0.state.shape} action={t0.action.shape} "
-            f"next_state={t0.next_state.shape} goal={t0.goal.shape}"
+            f"next_state={t0.next_state.shape} goal={t0.goal.shape}",
+            flush=True,
+        )
+        print(
+            f"  next: episode split + worker BC dataset with K={args.horizon_k} "
+            f"(about {args.horizon_k}x more examples than transitions)",
+            flush=True,
         )
 
     model = GoalConditionedWorker(hidden_dims=tuple(args.hidden_dims))
@@ -117,6 +130,7 @@ def main() -> None:
         batch_size=args.batch_size,
         epochs=args.epochs,
         lr=args.lr,
+        log=lambda message: print(message, flush=True),
     )
 
     train_mse = metrics["train_mse"]

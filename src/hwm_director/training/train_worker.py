@@ -8,6 +8,7 @@ Actions stay in ``[-1, 1]`` and are not standardized.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import NamedTuple, Sequence
 
 import numpy as np
@@ -304,6 +305,7 @@ def train_goal_conditioned_worker(
     batch_size: int = 64,
     epochs: int = 20,
     lr: float = 1e-3,
+    log: Callable[[str], None] | None = None,
 ) -> dict:
     """Fit ``pi_L`` by behavior cloning and return metrics.
 
@@ -315,9 +317,14 @@ def train_goal_conditioned_worker(
     4. Adam + MSE on predicted vs recorded actions.
     5. Report train/val action MSE and zero-action val MSE.
     """
+    def _emit(message: str) -> None:
+        if log is not None:
+            log(message)
+
     if len(transitions) < 2:
         raise ValueError("Need at least 2 transitions for a train/val split")
 
+    _emit("splitting episodes...")
     train_idx, val_idx = split_episode_indices(
         transitions, val_fraction=val_fraction, seed=seed
     )
@@ -328,12 +335,24 @@ def train_goal_conditioned_worker(
     val_episode_ids = tuple(sorted({int(t.episode_id) for t in val_raw}))
     all_episode_ids = tuple(sorted({int(t.episode_id) for t in transitions}))
 
+    _emit(
+        f"fit normalizer on {len(train_raw)} train transitions "
+        f"({len(train_episode_ids)} episodes)..."
+    )
     normalizer = StateNormalizer().fit(_stack_states(train_raw))
+    _emit(
+        f"building worker BC examples (K={horizon_k}; ~K pairs per step, "
+        "same episode only)..."
+    )
     train_dataset = WorkerDataset(
         train_raw, horizon_k=horizon_k, normalizer=normalizer
     )
     val_dataset = WorkerDataset(
         val_raw, horizon_k=horizon_k, normalizer=normalizer
+    )
+    _emit(
+        f"train examples={len(train_dataset)}  val examples={len(val_dataset)}  "
+        f"batch_size={batch_size}  epochs={epochs}"
     )
     if len(train_dataset) == 0:
         raise ValueError("Training split produced no worker BC examples")
@@ -352,14 +371,21 @@ def train_goal_conditioned_worker(
     )
 
     model.train()
-    for _ in range(epochs):
+    for epoch in range(epochs):
+        running = 0.0
+        n_batches = 0
         for batch in loader:
             pred = model(batch["state"], batch["subgoal"])
             loss = loss_fn(pred, batch["action"])
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            running += float(loss.detach().cpu())
+            n_batches += 1
+        mean_loss = running / max(n_batches, 1)
+        _emit(f"epoch {epoch + 1}/{epochs}  train_batch_mse={mean_loss:.6f}")
 
+    _emit("computing train/val action MSE...")
     train_pred = _predict_actions(model, train_dataset, batch_size)
     val_pred = _predict_actions(model, val_dataset, batch_size)
     train_target = train_dataset.actions.numpy()

@@ -76,6 +76,60 @@ def _future_xy(traj: Sequence[Transition], t: int, k: int) -> np.ndarray:
     return np.asarray(traj[t + k - 1].next_state[:ACHIEVED_GOAL_DIM])
 
 
+def _empty_arrays() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    return (
+        np.zeros((0, STATE_DIM), dtype=np.float32),
+        np.zeros((0, ACHIEVED_GOAL_DIM), dtype=np.float32),
+        np.zeros((0, ACTION_DIM), dtype=np.float32),
+        np.zeros((0,), dtype=np.int32),
+    )
+
+
+def _bc_arrays_from_transitions(
+    transitions: Sequence[Transition],
+    horizon_k: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Vectorized same-episode ``(state, subgoal, action, k)`` arrays.
+
+    For each episode of length ``L`` and each ``k`` in ``1..min(K, L)``, take
+    every ``t`` with ``t + k <= L`` (i.e. ``t = 0 .. L-k``).
+    """
+    state_chunks: list[np.ndarray] = []
+    subgoal_chunks: list[np.ndarray] = []
+    action_chunks: list[np.ndarray] = []
+    offset_chunks: list[np.ndarray] = []
+    for traj in group_by_episode(transitions).values():
+        n_steps = len(traj)
+        if n_steps == 0:
+            continue
+        states = np.stack([np.asarray(t.state, dtype=np.float32) for t in traj], axis=0)
+        next_xy = np.stack(
+            [
+                np.asarray(t.next_state[:ACHIEVED_GOAL_DIM], dtype=np.float32)
+                for t in traj
+            ],
+            axis=0,
+        )
+        actions = np.stack(
+            [np.asarray(t.action, dtype=np.float32) for t in traj], axis=0
+        )
+        last_k = min(horizon_k, n_steps)
+        for k in range(1, last_k + 1):
+            n_t = n_steps - k + 1
+            state_chunks.append(states[:n_t])
+            subgoal_chunks.append(next_xy[k - 1 : k - 1 + n_t])
+            action_chunks.append(actions[:n_t])
+            offset_chunks.append(np.full(n_t, k, dtype=np.int32))
+    if not state_chunks:
+        return _empty_arrays()
+    return (
+        np.concatenate(state_chunks, axis=0),
+        np.concatenate(subgoal_chunks, axis=0),
+        np.concatenate(action_chunks, axis=0),
+        np.concatenate(offset_chunks, axis=0),
+    )
+
+
 class WorkerDataset(Dataset):
     """Indexable ``(state, subgoal, action)`` tensors for ``pi_L``.
 
@@ -84,6 +138,9 @@ class WorkerDataset(Dataset):
     - ``state``: ``(STATE_DIM,)``
     - ``subgoal``: ``(ACHIEVED_GOAL_DIM,)``
     - ``action``: ``(ACTION_DIM,)``  (not normalized; already in [-1, 1])
+
+    Arrays are built with a vectorized per-episode slice (not one Python
+    object per ``(t, k)`` pair). ``.examples`` is a lazy view for tests.
     """
 
     def __init__(
@@ -96,49 +153,37 @@ class WorkerDataset(Dataset):
             raise ValueError(f"horizon_k must be >= 1, got {horizon_k}")
         self.horizon_k = int(horizon_k)
         self.normalizer = normalizer
-        self.examples = self._build_examples(list(transitions))
-        if not self.examples:
-            self.states = torch.zeros(0, STATE_DIM, dtype=torch.float32)
-            self.subgoals = torch.zeros(0, ACHIEVED_GOAL_DIM, dtype=torch.float32)
-            self.actions = torch.zeros(0, ACTION_DIM, dtype=torch.float32)
-            return
-        self.states = torch.as_tensor(
-            np.stack([e.state for e in self.examples]), dtype=torch.float32
+        states, subgoals, actions, offsets = _bc_arrays_from_transitions(
+            list(transitions), self.horizon_k
         )
-        self.subgoals = torch.as_tensor(
-            np.stack([e.subgoal for e in self.examples]), dtype=torch.float32
-        )
-        self.actions = torch.as_tensor(
-            np.stack([e.action for e in self.examples]), dtype=torch.float32
-        )
+        if self.normalizer is not None and states.shape[0] > 0:
+            states = self.normalizer.normalize(states).astype(np.float32, copy=False)
+            subgoals = normalize_subgoal(subgoals, self.normalizer).astype(
+                np.float32, copy=False
+            )
+        self.offsets = offsets
+        self.states = torch.as_tensor(states, dtype=torch.float32)
+        self.subgoals = torch.as_tensor(subgoals, dtype=torch.float32)
+        self.actions = torch.as_tensor(actions, dtype=torch.float32)
+        self._examples: list[WorkerExample] | None = None
 
-    def _build_examples(self, transitions: list[Transition]) -> list[WorkerExample]:
-        """Build BC pairs from future x/y in the same episode."""
-        examples: list[WorkerExample] = []
-        for traj in group_by_episode(transitions).values():
-            n_steps = len(traj)
-            for t in range(n_steps):
-                max_k = n_steps - t
-                last_k = min(self.horizon_k, max_k)
-                for k in range(1, last_k + 1):
-                    state = np.asarray(traj[t].state)
-                    subgoal = _future_xy(traj, t, k)
-                    action = np.asarray(traj[t].action)
-                    if self.normalizer is not None:
-                        state = self.normalizer.normalize(state)
-                        subgoal = normalize_subgoal(subgoal, self.normalizer)
-                    examples.append(
-                        WorkerExample(
-                            state=state,
-                            subgoal=subgoal,
-                            action=action,
-                            offset=k,
-                        )
-                    )
-        return examples
+    @property
+    def examples(self) -> list[WorkerExample]:
+        """Materialize ``WorkerExample`` rows (for tests; avoid on 1e6-scale data)."""
+        if self._examples is None:
+            self._examples = [
+                WorkerExample(
+                    state=self.states[i].numpy(),
+                    subgoal=self.subgoals[i].numpy(),
+                    action=self.actions[i].numpy(),
+                    offset=int(self.offsets[i]),
+                )
+                for i in range(len(self))
+            ]
+        return self._examples
 
     def __len__(self) -> int:
-        return len(self.examples)
+        return int(self.states.shape[0])
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
         """Return one BC example as CPU float32 tensors."""
