@@ -38,19 +38,13 @@ Minari episode `infos` include `qpos` `(15,)` and `qvel` `(14,)` at each observa
 
 ## Representation
 
-$$
-s_t = [\texttt{achieved\_goal},\; \texttt{observation}] \in \mathbb{R}^{29}
-$$
+$s_t$ is the concatenation of `achieved_goal` and `observation`. $g^{\star}$ is `desired_goal`. $E$ is `IdentityEncoder` (NumPy copy, not learned).
 
 $$
-g^\star = \texttt{desired\_goal} \in \mathbb{R}^{2}, \qquad a_t \in \mathbb{R}^{8}
+s_t \in \mathbb{R}^{29}, \quad g^{\star} \in \mathbb{R}^{2}, \quad a_t \in \mathbb{R}^{8}, \quad E(s_t) = s_t
 $$
 
-$$
-E(s_t) = s_t
-$$
-
-(`IdentityEncoder`: NumPy copy, not learned.) Dimensions live in `src/hwm_director/data/state.py` as `STATE_DIM = ACHIEVED_GOAL_DIM + OBSERVATION_DIM`.
+Dimensions live in `src/hwm_director/data/state.py` as `STATE_DIM = ACHIEVED_GOAL_DIM + OBSERVATION_DIM`.
 
 The 29-D state is also enough to recover Ant-v4 simulator coordinates: `qpos = state[0:15]`, `qvel = state[15:29]` (`ant_v4_qpos_qvel_from_state`). The loader prefers recorded Minari `infos` when they are present.
 
