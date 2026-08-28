@@ -14,6 +14,7 @@ from hwm_director.data.minari_antmaze import (
     load_minari_transitions,
 )
 from hwm_director.models.dynamics_low import LowLevelDynamicsModel
+from hwm_director.training.checkpoints import save_dynamics_checkpoint
 from hwm_director.training.train_dynamics import train_low_level_dynamics
 
 SEED = 0
@@ -36,7 +37,7 @@ def main() -> None:
     )
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--val-fraction", type=float, default=0.2)
-    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument(
@@ -50,6 +51,16 @@ def main() -> None:
         "--verbose",
         action="store_true",
         help="print train/validation episode IDs",
+    )
+    parser.add_argument(
+        "--save-checkpoint",
+        action="store_true",
+        help="write f_L weights + normalizer after training",
+    )
+    parser.add_argument(
+        "--checkpoint-path",
+        default="checkpoints/f_l.pt",
+        help="path used with --save-checkpoint",
     )
     args = parser.parse_args()
 
@@ -70,6 +81,11 @@ def main() -> None:
             f"next_state={t0.next_state.shape} goal={t0.goal.shape}"
         )
 
+    print(
+        "starting f_L training (preprocess then "
+        f"{args.epochs} epochs on {len(transitions)} transitions)",
+        flush=True,
+    )
     model = LowLevelDynamicsModel(hidden_dims=tuple(args.hidden_dims))
     metrics = train_low_level_dynamics(
         transitions,
@@ -101,6 +117,12 @@ def main() -> None:
     print(f"  no-change baseline val MSE: {no_change:.6f}")
     print(f"  val x/y MSE: {val_xy:.6f}")
     print(f"  learned val MSE {vs_baseline} no-change ({val_mse:.6f} vs {no_change:.6f})")
+
+    if args.save_checkpoint:
+        save_dynamics_checkpoint(
+            args.checkpoint_path, metrics["model"], metrics["normalizer"]
+        )
+        print(f"saved f_L checkpoint to {args.checkpoint_path}")
 
 
 if __name__ == "__main__":

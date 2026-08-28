@@ -36,8 +36,25 @@ class TransitionDataset(Dataset):
             np.stack([t.next_state for t in self.transitions]), dtype=torch.float32
         )
 
+    @classmethod
+    def from_arrays(
+        cls,
+        states: np.ndarray,
+        actions: np.ndarray,
+        next_states: np.ndarray,
+    ) -> TransitionDataset:
+        """Build from stacked ``(N, ...)`` arrays (avoids copying 1M objects)."""
+        dataset = cls.__new__(cls)
+        dataset.transitions = []
+        dataset.states = torch.as_tensor(np.asarray(states), dtype=torch.float32)
+        dataset.actions = torch.as_tensor(np.asarray(actions), dtype=torch.float32)
+        dataset.next_states = torch.as_tensor(
+            np.asarray(next_states), dtype=torch.float32
+        )
+        return dataset
+
     def __len__(self) -> int:
-        return len(self.transitions)
+        return int(self.states.shape[0])
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
         """Return one transition as CPU float32 tensors.

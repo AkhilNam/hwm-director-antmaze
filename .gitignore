@@ -8,3 +8,5 @@ build/
 venv/
 .env
 .DS_Store
+checkpoints/*.pt
+!checkpoints/.gitkeep

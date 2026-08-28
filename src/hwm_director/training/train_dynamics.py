@@ -64,17 +64,13 @@ def split_episode_indices(
     n_val = min(max(n_val, 1), n_episodes - 1)
 
     shuffled = np.random.default_rng(seed).permutation(episode_ids)
-    val_episodes = set(int(x) for x in shuffled[-n_val:])
-    train_episodes = set(int(x) for x in shuffled[:-n_val])
-
-    train_idx = np.array(
-        [i for i, t in enumerate(transitions) if int(t.episode_id) in train_episodes],
-        dtype=np.int64,
+    val_episodes = np.asarray(shuffled[-n_val:], dtype=np.int64)
+    train_episodes = np.asarray(shuffled[:-n_val], dtype=np.int64)
+    row_ids = np.fromiter(
+        (int(t.episode_id) for t in transitions), dtype=np.int64, count=n
     )
-    val_idx = np.array(
-        [i for i, t in enumerate(transitions) if int(t.episode_id) in val_episodes],
-        dtype=np.int64,
-    )
+    train_idx = np.flatnonzero(np.isin(row_ids, train_episodes)).astype(np.int64)
+    val_idx = np.flatnonzero(np.isin(row_ids, val_episodes)).astype(np.int64)
     return train_idx, val_idx
 
 
@@ -111,6 +107,10 @@ def next_position_mse(
     )
 
 
+def _log(message: str) -> None:
+    print(message, flush=True)
+
+
 def _select(
     transitions: Sequence[Transition], indices: np.ndarray
 ) -> list[Transition]:
@@ -118,26 +118,11 @@ def _select(
 
 
 def _stack_states(transitions: Sequence[Transition], field: str) -> np.ndarray:
-    return np.stack([getattr(t, field) for t in transitions], axis=0)
-
-
-def _normalized_transitions(
-    transitions: Sequence[Transition], normalizer: StateNormalizer
-) -> list[Transition]:
-    states = normalizer.normalize(_stack_states(transitions, "state"))
-    next_states = normalizer.normalize(_stack_states(transitions, "next_state"))
-    return [
-        Transition(
-            state=states[i],
-            action=transitions[i].action,
-            next_state=next_states[i],
-            goal=transitions[i].goal,
-            episode_id=transitions[i].episode_id,
-            qpos=transitions[i].qpos,
-            qvel=transitions[i].qvel,
-        )
-        for i in range(len(transitions))
-    ]
+    first = np.asarray(getattr(transitions[0], field))
+    out = np.empty((len(transitions),) + first.shape, dtype=np.float64)
+    for i, transition in enumerate(transitions):
+        out[i] = np.asarray(getattr(transition, field), dtype=np.float64)
+    return out
 
 
 def _predict_next_states(
@@ -184,6 +169,7 @@ def train_low_level_dynamics(
     if n < 2:
         raise ValueError("Need at least 2 transitions for a train/val split")
 
+    _log(f"f_L: splitting {n} transitions by episode...")
     train_idx, val_idx = split_episode_indices(
         transitions, val_fraction=val_fraction, seed=seed
     )
@@ -194,12 +180,28 @@ def train_low_level_dynamics(
     val_episode_ids = tuple(sorted({int(t.episode_id) for t in val_raw}))
     all_episode_ids = tuple(sorted({int(t.episode_id) for t in transitions}))
 
-    normalizer = StateNormalizer().fit(_stack_states(train_raw, "state"))
-    train_norm = _normalized_transitions(train_raw, normalizer)
-    val_norm = _normalized_transitions(val_raw, normalizer)
+    _log(
+        f"f_L: stacking arrays (train={len(train_raw)}, val={len(val_raw)})..."
+    )
+    train_states = _stack_states(train_raw, "state")
+    train_actions = _stack_states(train_raw, "action")
+    train_next = _stack_states(train_raw, "next_state")
+    val_states = _stack_states(val_raw, "state")
+    val_actions = _stack_states(val_raw, "action")
+    val_next = _stack_states(val_raw, "next_state")
 
-    train_dataset = TransitionDataset(train_norm)
-    val_dataset = TransitionDataset(val_norm)
+    _log("f_L: fitting normalizer on train states only...")
+    normalizer = StateNormalizer().fit(train_states)
+    train_dataset = TransitionDataset.from_arrays(
+        normalizer.normalize(train_states),
+        train_actions,
+        normalizer.normalize(train_next),
+    )
+    val_dataset = TransitionDataset.from_arrays(
+        normalizer.normalize(val_states),
+        val_actions,
+        normalizer.normalize(val_next),
+    )
 
     if model is None:
         model = LowLevelDynamicsModel()
@@ -213,16 +215,30 @@ def train_low_level_dynamics(
         shuffle=True,
         generator=torch.Generator().manual_seed(seed),
     )
+    steps_per_epoch = max(1, (len(train_dataset) + batch_size - 1) // batch_size)
+    _log(
+        f"f_L: training {epochs} epochs, {len(train_dataset)} examples, "
+        f"batch_size={batch_size} (~{steps_per_epoch} batches/epoch)."
+    )
 
     model.train()
-    for _ in range(epochs):
+    for epoch in range(epochs):
+        running = 0.0
+        n_batches = 0
         for batch in loader:
             pred = model.predict_next_state(batch["state"], batch["action"])
             loss = loss_fn(pred, batch["next_state"])
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            running += float(loss.detach())
+            n_batches += 1
+        _log(
+            f"f_L: epoch {epoch + 1}/{epochs} "
+            f"mean_batch_loss={running / max(n_batches, 1):.6f}"
+        )
 
+    _log("f_L: evaluating train/val MSE...")
     train_pred = _predict_next_states(model, train_dataset, batch_size)
     val_pred = _predict_next_states(model, val_dataset, batch_size)
     train_target = train_dataset.next_states.numpy()
@@ -232,10 +248,7 @@ def train_low_level_dynamics(
     train_mse = float(np.mean((train_pred - train_target) ** 2))
     val_mse = float(np.mean((val_pred - val_target) ** 2))
     no_change = no_change_baseline_mse(val_state, val_target)
-    val_xy = next_position_mse(
-        normalizer.denormalize(val_pred),
-        _stack_states(val_raw, "next_state"),
-    )
+    val_xy = next_position_mse(normalizer.denormalize(val_pred), val_next)
 
     return {
         "train_mse": train_mse,

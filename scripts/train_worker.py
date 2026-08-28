@@ -16,6 +16,7 @@ from hwm_director.data.minari_antmaze import (
 )
 from hwm_director.data.worker_dataset import DEFAULT_HORIZON_K
 from hwm_director.models.worker import GoalConditionedWorker
+from hwm_director.training.checkpoints import save_worker_checkpoint
 from hwm_director.training.train_worker import (
     DEFAULT_MAX_SUBGOAL_DISTANCE,
     DEFAULT_MIN_SUBGOAL_DISTANCE,
@@ -94,6 +95,16 @@ def main() -> None:
         action="store_true",
         help="print episode IDs and per-trial eval details",
     )
+    parser.add_argument(
+        "--save-checkpoint",
+        action="store_true",
+        help="write pi_L weights + normalizer after training",
+    )
+    parser.add_argument(
+        "--checkpoint-path",
+        default="checkpoints/pi_l.pt",
+        help="path used with --save-checkpoint",
+    )
     args = parser.parse_args()
 
     transitions = load_minari_transitions(
@@ -156,6 +167,12 @@ def main() -> None:
         f"  learned val MSE {vs_baseline} zero-action "
         f"({val_mse:.6f} vs {zero_mse:.6f})"
     )
+
+    if args.save_checkpoint:
+        save_worker_checkpoint(
+            args.checkpoint_path, metrics["model"], metrics["normalizer"]
+        )
+        print(f"saved pi_L checkpoint to {args.checkpoint_path}", flush=True)
 
     if args.n_eval_trials > 0:
         val_ids = set(metrics["val_episode_ids"])
