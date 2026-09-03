@@ -1,0 +1,4 @@
+{
+  "name": "hwm-director-antmaze",
+  "install": "bash .cursor/install.sh"
+}
