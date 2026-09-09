@@ -1,8 +1,8 @@
 # Faithful HWM Port Plan
 
-**Status:** Architecture plan complete. **M1 implemented** (Level-1 observation encoder, shape parity only). M2 and later are not started. No training, no dataset regeneration, no PACE jobs.
+**Status:** Architecture plan complete. **M1 implemented** (Level-1 observation encoder). **M2 implemented** (Level-1 residual conv predictor + recursive rollout, shape/architecture parity only). M3 and later are not started. No training, no dataset regeneration, no PACE jobs.
 
-**Date:** 2026-09-09 (M1: 2026-09-09)
+**Date:** 2026-09-09 (M1: 2026-09-09; M2: 2026-09-09)
 
 **Original HWM reference:** [kevinghst/HWM_PLDM](https://github.com/kevinghst/HWM_PLDM) at SHA `e197375b844692a0a2e1342889f95a78edced07a` (read-only). Local clone used for tracing: `hwm-original-repro`.
 
@@ -606,7 +606,7 @@ Order is driven by code: L1 is a frozen encoder for L2, and hierarchical plannin
 | --- | --- | --- |
 | **M0** | Dataset + observation pipeline parity (loader only; **no regeneration**) | Can iterate `data.p` + `images.npy`, produce L1 windows `[15,3,98,98]` and L2 windows `[7,3,98,98]` + chunked `[6,10,2]` actions; normalizer stats match hardset |
 | **M1** | L1 visual encoder + proprio fusion | **IMPLEMENTED** (2026-09-09). Synthetic 98×98 forward: visual `[B,16,43,43]`, fused `[B,18,43,43]`. See Section 17. |
-| **M2** | L1 residual conv world model | 14-step rollout shapes; residual; action expand to 2 channels |
+| **M2** | L1 residual conv world model | **IMPLEMENTED** (2026-09-09). Recursive 14-step rollout `[15,B,18,43,43]`; residual on all 18 fused channels; action expand to 2 spatial channels. See Section 18. |
 | **M3** | L1 training + representation checks | VICRegObs+IDM+PredProprio on Diverse Maze; location probe error vs frozen random encoder; no AntMaze yet |
 | **M4** | L1 MPPI | Flat L1 planning runs on a few envs without crash; actions `(2,)`; optional comparison to original L1-only yaml (not the 82.5/90 target) |
 | **M5** | L2 skip + identity backbone + conv `f_H` | Skip-10 batch → L1 encode_only → L2 residual predict |
@@ -684,7 +684,7 @@ Original `Trainer` calls `self.model.cuda()` with no CPU fallback. Faithful trai
 
 ## 17. M1 implementation (Level-1 encoder)
 
-**Status: IMPLEMENTED.** M2+ remain not started.
+**Status: IMPLEMENTED.** M2 is implemented separately (Section 18). M3+ remain not started.
 
 ### Files
 
@@ -760,4 +760,126 @@ Results (CPU, 2026-09-09): `10 passed in 430.36s`. Smoke: fused `[4, 18, 43, 43]
 ### Not in M1
 
 Predictor / `f_L`, losses, L2, `z`, MPPI, datasets, training.
+
+---
+
+## 18. M2 implementation (Level-1 residual conv predictor)
+
+**Status: IMPLEMENTED.** M3+ remain not started. Architecture and rollout semantics only; no training objectives.
+
+### Files
+
+```
+src/hwm_faithful/models/action_encoder.py     # PrimitiveActionEncoder
+src/hwm_faithful/models/conv_predictor.py     # Level1Predictor
+src/hwm_faithful/models/level1_world_model.py # Level1WorldModel (E + f_L)
+tests/test_hwm_faithful_level1_predictor.py
+scripts/smoke_hwm_faithful_level1_predictor.py
+src/hwm_faithful/shapes.py                    # ACTION_DIM, PREDICTOR_IN_CHANNELS
+```
+
+`src/hwm_director/` was not modified. Original HWM was not modified.
+
+### Original mapping
+
+| Ours | Original |
+| --- | --- |
+| `PrimitiveActionEncoder` | `ConvPredictor.action_encoder` = `Expander2D` when `action_encoder_arch='id'` |
+| `Level1Predictor` | `ConvPredictor` (`predictor_arch=conv2`, subclass `d4rl_b_p`) |
+| `Level1Predictor.compute_delta` | `self.layers(cat([h, a_map], dim=1))` |
+| `fused = h + delta` | `ConvPredictor.forward`: `x = x + current_state` if `residual` |
+| `obs_component` / `proprio_component` | `SequencePredictor._separate_obs_proprio_from_fused_repr` (last 2 channels = proprio) |
+| `Level1Predictor.rollout` | `SequencePredictor.forward_multiple` |
+| `Level1WorldModel` | `JEPA` encoder + predictor, L1 only (`z_dim=0`) |
+| `Level1PredictorOutput` | `SingleStepPredictorOutput` |
+| `Level1RolloutOutput` | `PredictorOutput` (predictions / obs / proprio) |
+
+Factory path: `build_predictor` → `build_single_predictor` → `arch=="conv2"` → `ConvPredictor`. YAML `rnn_converter_arch`, `rnn_layers`, `rnn_state_dim` are unused for this arch. `predictor_ln` defaults false; `final_ln` is `Identity` and is **not applied** in `ConvPredictor.forward`.
+
+### Action-conditioning path
+
+```
+a_t  [B, 2]
+  -> Expander2D / PrimitiveActionEncoder (no MLP, 0 params)
+  -> action_map [B, 2, 43, 43]
+  -> cat([h_t, action_map], dim=1)   # h first, action last
+  -> [B, 20, 43, 43]
+```
+
+`z_dim=0`: no latent, no prior/posterior. Primitive action only.
+
+### Predictor layer sequence (`group_factor=8`, not the encoder's 4)
+
+| Step | Op | Output |
+| --- | --- | --- |
+| h | fused L1 state | `[B, 18, 43, 43]` |
+| a | primitive action | `[B, 2]` |
+| expand | spatial broadcast | `[B, 2, 43, 43]` |
+| concat | channel cat | `[B, 20, 43, 43]` |
+| block0 | Conv 20→32, k=3, s=1, p=1 + GN(4) + ReLU | `[B, 32, 43, 43]` |
+| block1 | Conv 32→32, k=3, s=1, p=1 + GN(4) + ReLU | `[B, 32, 43, 43]` |
+| block2 | Conv 32→18, k=3, s=1, p=1 (no GN, no ReLU) | `[B, 18, 43, 43]` |
+| residual | `h_next = h + delta` | `[B, 18, 43, 43]` |
+| split | first 16 visual, last 2 proprio | `[B, 16, 43, 43]` + `[B, 2, 43, 43]` |
+
+Table `d4rl_b_p` is `[(20,32,3,1,1), (32,32,3,1,1), (32,18,3,1,1)]`. `build_conv` still overrides first-layer in-channels to the actual concat width (20). Last conv has no GroupNorm/ReLU (`last_layer_act_norm=False`).
+
+### Residual semantics (critical)
+
+Original **`ConvPredictor`** (the executed L1 class) adds residual to the **full fused 18-channel state**:
+
+```
+delta = conv(cat(h, a_map))
+h_next = h + delta
+```
+
+This includes proprio channels. Do not confuse with `ConvLocalPredictor`, which comments "only apply residual to obs" — that class is not used by Diverse Maze L1 (`predictor_arch=conv2`). No LayerNorm after the add.
+
+### Rollout convention
+
+Original `forward_multiple`:
+
+- Input `state_encs[0]` = `h0`, `actions` length `T` (JEPA training: `T = n_steps - 1 = 14`)
+- Loop uses **predicted** `current_state`, not ground-truth `state_encs[t]`
+- Output `predictions` shape **`[T+1, B, 18, 43, 43]`**
+- Index 0 is `h0`; index `t+1` is `f(h_t, a_t)`
+
+Live original check: `T=3` → `predictions (4, B, 18, 43, 43)`, `rollout[0] == h`, `out == h + layers(cat(h, a_map))`.
+
+### Parameter counts
+
+| Module | Ours | Original |
+| --- | --- | --- |
+| action expander | 0 | 0 (`Expander2D`) |
+| conv predictor | **20,370** | **20,370** (`ConvPredictor.layers`) |
+| unused `final_ln` | omitted | `Identity` (0 params) |
+
+Live original instantiation (`build_predictor(conv2, d4rl_b_p, residual=true, action_encoder_arch=id, z_dim=0)`): 20,370 trainable params. Same as ours.
+
+Breakdown: Conv(20,32,3)+bias 5,792; GN(32) 64; Conv(32,32,3)+bias 9,248; GN(32) 64; Conv(32,18,3)+bias 5,202. Total 20,370.
+
+World-model total = encoder 33,296 + predictor 20,370 = 53,666.
+
+### Implementation differences (intentional)
+
+- Clean modules instead of copying `ConvPredictor` / `SequencePredictor` / the full `ConvPredictorConfig` table.
+- No unused `final_ln` Identity, prior/posterior, ensemble, RNN, or `z` heads (`z_dim=0`).
+- `expand` + `contiguous` rather than `repeat` (values identical).
+- Typed outputs; explicit `ValueError` on bad shapes.
+- No `.cuda()`; device follows inputs.
+
+### Tests
+
+```
+PYTHONPATH=src python -m pytest tests/test_hwm_faithful_level1_predictor.py -q
+PYTHONPATH=src python scripts/smoke_hwm_faithful_level1_predictor.py
+```
+
+Results (CPU, 2026-09-09): `16 passed in 2345.10s`. Live original `ConvPredictor`: 20,370 params; one-step `[2,18,43,43]`; T=3 rollout `[4,2,18,43,43]`; residual `h + conv(cat(h,a_map))` holds.
+
+Smoke: one-step `[4,18,43,43]`, 14-step rollout `[15,4,18,43,43]` with `rollout[0]=h0`, `predictor=20370 action=0 encoder=33296 world_model=53666`, `scalar loss 26.421385`, predictor grads ok, encode→predict `[4,18,43,43]`.
+
+### Not in M2
+
+VICReg / IDM / proprio losses, optimizer, training loop, dataset loader, Level 2, latent `z`, MPPI, hierarchical planning, AntMaze.
 
