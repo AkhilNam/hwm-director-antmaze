@@ -1,8 +1,8 @@
 # Faithful HWM Port Plan
 
-**Status:** Architecture plan complete. **M1 implemented** (Level-1 observation encoder). **M2 implemented** (Level-1 residual conv predictor + recursive rollout, shape/architecture parity only). M3 and later are not started. No training, no dataset regeneration, no PACE jobs.
+**Status:** Architecture plan complete. **M1 implemented**. **M2 implemented**. **M3 implemented** (Level-1 objectives + tiny synthetic overfit; no full Diverse Maze training). **M4 implemented** (Level-1 MPPI planner `pi_L` + synthetic/unit tests; no Diverse Maze eval). M5 and later are not started. No dataset regeneration, no PACE jobs.
 
-**Date:** 2026-09-09 (M1: 2026-09-09; M2: 2026-09-09)
+**Date:** 2026-09-09 (M1/M2/M3/M4: 2026-09-09)
 
 **Original HWM reference:** [kevinghst/HWM_PLDM](https://github.com/kevinghst/HWM_PLDM) at SHA `e197375b844692a0a2e1342889f95a78edced07a` (read-only). Local clone used for tracing: `hwm-original-repro`.
 
@@ -424,7 +424,7 @@ Do **not** pretend this is a clean 1-1 with the current AntMaze code.
 | --- | --- | --- |
 | `ρ` / `E` | L1 visual encoder `MeNet6` (`d4rl_a`) + late proprio expander | Learned. Output is spatial `[16+2, 43, 43]`, not 29D identity. |
 | `f_L` | L1 residual conv predictor, primitive `a ∈ R^2` | Predictive model in **representation** space, not `s_{t+1} = s_t + MLP([s,a])`. |
-| `pi_L` | **L1 MPPI planner**, not a BC worker | Optimizes primitive actions online with `f_L`. No cloned neural `pi_L`. |
+| `pi_L` | **L1 MPPI planner** (`Level1MPPIPlanner`, M4), not a BC worker | Online planning: `pi_L(h, o*; f_L)`. No cloned neural worker. |
 | `f_H` | L2 residual conv predictor on `z ∈ R^8` | Explicit learned high-level world model. Operates on L1 features, skip 10. |
 | `pi_H` | **L2 MPPI planner** | Not a learned manager, not candidate retrieval, not `Q_H`. |
 
@@ -607,8 +607,8 @@ Order is driven by code: L1 is a frozen encoder for L2, and hierarchical plannin
 | **M0** | Dataset + observation pipeline parity (loader only; **no regeneration**) | Can iterate `data.p` + `images.npy`, produce L1 windows `[15,3,98,98]` and L2 windows `[7,3,98,98]` + chunked `[6,10,2]` actions; normalizer stats match hardset |
 | **M1** | L1 visual encoder + proprio fusion | **IMPLEMENTED** (2026-09-09). Synthetic 98×98 forward: visual `[B,16,43,43]`, fused `[B,18,43,43]`. See Section 17. |
 | **M2** | L1 residual conv world model | **IMPLEMENTED** (2026-09-09). Recursive 14-step rollout `[15,B,18,43,43]`; residual on all 18 fused channels; action expand to 2 spatial channels. See Section 18. |
-| **M3** | L1 training + representation checks | VICRegObs+IDM+PredProprio on Diverse Maze; location probe error vs frozen random encoder; no AntMaze yet |
-| **M4** | L1 MPPI | Flat L1 planning runs on a few envs without crash; actions `(2,)`; optional comparison to original L1-only yaml (not the 82.5/90 target) |
+| **M3** | L1 training + representation checks | **IMPLEMENTED** (2026-09-09) for **objectives + tiny overfit only**. VICRegObs+IDM+PredProprio match released L1 YAML; full Diverse Maze training and location probes are later. See Section 19. |
+| **M4** | L1 MPPI | **IMPLEMENTED** (2026-09-09). Original MPPI semantics, representation cost, synthetic + random-weight smoke. No full Diverse Maze eval. See Section 20. |
 | **M5** | L2 skip + identity backbone + conv `f_H` | Skip-10 batch → L1 encode_only → L2 residual predict |
 | **M6** | Latent `z` posterior | Train-time `z = posterior(actions_chunk)`; shape `[B,8]`; L2 conditioned on `z` not on `a` |
 | **M7** | Hierarchical MPPI | `pred_obs[1]` as L1 target; replan_every=4; action_repeat=4; final 15-step L1 |
@@ -882,4 +882,330 @@ Smoke: one-step `[4,18,43,43]`, 14-step rollout `[15,4,18,43,43]` with `rollout[
 ### Not in M2
 
 VICReg / IDM / proprio losses, optimizer, training loop, dataset loader, Level 2, latent `z`, MPPI, hierarchical planning, AntMaze.
+
+---
+
+## 19. M3 implementation (Level-1 objectives)
+
+**Status: IMPLEMENTED** for objective parity + tiny synthetic overfit. Full Diverse Maze training and probes are later. M4 MPPI is Section 20.
+
+### Files
+
+```
+src/hwm_faithful/losses/coefficients.py
+src/hwm_faithful/losses/vicreg_obs.py
+src/hwm_faithful/losses/inverse_dynamics.py
+src/hwm_faithful/losses/prediction_proprio.py
+src/hwm_faithful/losses/level1_objective.py
+src/hwm_faithful/losses/__init__.py
+src/hwm_faithful/models/level1_world_model.py   # encode_sequence / encode_and_rollout
+tests/test_hwm_faithful_level1_losses.py
+scripts/smoke_hwm_faithful_level1_losses.py
+scripts/overfit_hwm_faithful_level1_tiny.py
+```
+
+`src/hwm_director/` was not modified. Original HWM was not modified.
+
+### Original mapping
+
+| Ours | Original |
+| --- | --- |
+| `vicreg_obs` | `VICRegObjective` (`pred_attr='obs'`) + inner `PredictionObjective` |
+| `InverseDynamics` | `IDMObjective.action_predictor` via `build_conv(CONV_LAYERS_CONFIG['a'])` |
+| `idm_loss` | `IDMObjective.__call__` with `use_pred=false` |
+| `prediction_proprio` | `PredictionObjective` (`pred_attr='proprio'`) |
+| `Level1Objective` | sum of `objectives_l1` `total_loss` in `pldm/train.py` |
+
+Traced files: `pldm/objectives/{vicreg,idm,prediction,__init__}.py`, `pldm/train.py` (build + sum), `pldm/models/misc.py::Projector` / `build_projector`, `pldm/models/utils.py::{flatten_conv_output,build_conv}`.
+
+### Active released L1 YAML (`large_diverse_25maps.yaml`)
+
+```
+objectives:
+  - ObjectiveType.VICRegObs
+  - ObjectiveType.IDM
+  - ObjectiveType.PredictionProprio
+```
+
+| Field | Value | Used? |
+| --- | --- | --- |
+| `vicreg_obs.sim_coeff` | 1 | yes (obs prediction MSE) |
+| `vicreg_obs.std_coeff` | 29.409481669124336 | yes (t=0 encoded obs) |
+| `vicreg_obs.cov_coeff` | 17.8664279184067 | yes (t=0 encoded obs) |
+| `vicreg_obs.std_coeff_t` | 2.9199 | yes (encoded obs t=1..T-1, across time) |
+| `vicreg_obs.sim_coeff_t` | 0 | no (term skipped) |
+| `vicreg_obs.cov_coeff_t` | 0 | no (term skipped) |
+| `vicreg_obs.projector` | `id` | Identity, 0 params |
+| `vicreg_obs.adjust_cov` | true | yes |
+| `vicreg_obs.cov_per_feature` | false | unused branch |
+| `idm.coeff` | 4.810550706458433 | yes |
+| `idm.arch` / `arch_subclass` | `conv` / `a` | yes |
+| `idm.use_pred` | false | yes (GT encodings only) |
+| `prediction_proprio.global_coeff` | 2.416154262252218 | yes |
+| `probe` | coeff 1, subclass b | **inactive** (not in `objectives`) |
+
+`repr_dim` passed to the factory is `level1.spatial_repr_dim = (18, 43, 43)`. VICRegObs projector is Identity so this size is unused. IDM uses it as fused spatial input: concat channels 36.
+
+### VICRegObs (executed math)
+
+No learned projector. Targets are **not** detached.
+
+**Similarity (invariance)** is original `PredictionObjective` on **visual** maps:
+
+```
+sim = mean( (obs_gt[1:] - obs_pred[1:])^2 )
+```
+
+`obs_*` are `[T,B,16,H,W]`. This is **not** a cosine / VICReg-on-predictions term.
+
+**Std / cov** regularize **encoded** `obs_gt` only (not predictions):
+
+```
+z = flatten(obs_gt)                         # [T, B, 16*H*W]
+# batch VICReg at t=0, K=B:
+x = z[:1] - mean_K(z[:1])                   # [1, B, D]
+std = mean_D( relu(1 - sqrt(var_K(x) + 1e-4)) )
+cov = ( ||X^T X / (B-1)||_F^2 - ||diag||^2 ) / D / (D-1)
+# temporal std on t=1..T-1, K=T-1, per batch item:
+std_t = mean over B of the same hinge, var across time
+```
+
+`var` is PyTorch unbiased (`unbiased=True`). `adjust_cov=true` divides by `(D-1)` in addition to `D` (original comment). Covariance is implemented with the `K×K` Gram, algebraically equal to the original `D×D` einsum (unit-tested).
+
+```
+L_vicreg = 1·sim + 17.866…·cov + 29.409…·std + 2.9199·std_t
+```
+
+### IDM
+
+`use_pred=false`:
+
+```
+curr, next = h_gt[:-1], h_gt[1:]            # fused [T-1,B,18,43,43]
+x = cat(curr, next, dim=2).flatten(0,1)     # [(T-1)B, 36, 43, 43]
+a_hat = ConvIDM_a(x)                        # [(T-1)B, 2]
+L_idm = 4.810… · MSE(a_hat, actions.flatten(0,1))
+```
+
+Architecture (original `build_conv` default `group_factor=4`): Conv36→32 + GN(8)+ReLU, MaxPool2, Conv32→32 + GN+ReLU, MaxPool2, Conv32→32 + GN+ReLU, Flatten, Linear(3200, 2). Spatial 43→21→10.
+
+### PredictionProprio
+
+Spatial maps, not `[B,2]`:
+
+```
+L_prop = 2.416… · mean( (proprio_gt[1:] - proprio_pred[1:])^2 )
+```
+
+`proprio_*` are `[T,B,2,43,43]`. No decoder.
+
+### Temporal indexing
+
+| Term | Left | Right |
+| --- | --- | --- |
+| VICReg sim / PredProprio | `pred[1:]` | `gt[1:]` |
+| IDM pair | `h_gt[t], h_gt[t+1]` | `actions[t]` |
+| VICReg std/cov | `obs_gt[0]` only | — |
+| VICReg std_t | `obs_gt[1:]` across time | — |
+
+`h_pred[0] = h_gt[0]` is excluded from prediction MSEs. Recursive `h_pred[t+1] = f_L(h_pred[t], a_t)`.
+
+### Detach / gradients
+
+No `detach` in any of the three objectives.
+
+- Encoder: sim (as target), std/cov/std_t, IDM, PredProprio (as target)
+- Predictor: sim, PredProprio (not IDM)
+- IDM head: IDM only
+
+### Parameter counts
+
+| Module | Ours | Original |
+| --- | --- | --- |
+| VICReg projector | 0 | 0 (`Identity`) |
+| PredProprio | 0 | 0 |
+| IDM | **35,490** | **35,490** (`build_conv` subclass `a`, input `(36,43,43)`) |
+
+### Tests / smoke / overfit
+
+```
+PYTHONPATH=src python -m pytest tests/test_hwm_faithful_level1_losses.py -q
+PYTHONPATH=src python scripts/smoke_hwm_faithful_level1_losses.py
+PYTHONPATH=src python scripts/overfit_hwm_faithful_level1_tiny.py
+```
+
+Unit tests (CPU, 2026-09-09): `13 passed in 1516.30s`.
+
+Smoke (CPU, T=15, B=2): `h_gt`/`h_pred` `[15,2,18,43,43]`, `h_pred[0]=h_gt[0]`, `total=66.059`, `vicreg_obs=33.274` (sim 8.581, std 0.764, cov 0.00790, std_t 0.710), `idm=7.122`, `pred_proprio=25.663`; encoder/predictor/IDM grads ok. Params encoder 33,296 / predictor 20,370 / IDM 35,490.
+
+Tiny overfit (deterministic T=15, B=2, Adam `lr=1e-3`, 15 steps, no dataset):
+
+| step | total | vicreg | idm | pred_proprio |
+| --- | --- | --- | --- | --- |
+| 0 | 54.808 | 37.293 | 3.340 | 14.175 |
+| 7 | 24.600 | 23.179 | 0.220 | 1.201 |
+| 14 | 20.323 | 19.514 | 0.086 | 0.723 |
+
+Total **54.808 → 20.323**.
+
+### Differences from original
+
+- No `.cuda()`; device follows tensors.
+- VICReg cov uses the `K×K` Gram (same scalar as `D×D` einsum; required for CPU 16×43×43).
+- Clean modules; unused temporal-zero branches omitted.
+- `encode_sequence` flattens T×B through the M1 encoder (same per-frame map).
+
+### Not in M3
+
+Full Diverse Maze training, location probes, optimizer schedule/epochs from YAML, dataset loader, Level 2, `z`, hierarchical planning, AntMaze. Level-1 MPPI is M4 (Section 20).
+
+---
+
+## 20. M4 implementation (Level-1 MPPI / `pi_L`)
+
+**Status: IMPLEMENTED** for planner architecture, cost, sampling/update semantics, and synthetic validation. No Diverse Maze environment loop, no 500/1000-sample eval, no Level 2.
+
+Faithful HWM `pi_L` is this planner, **not** the BC worker in `src/hwm_director/`.
+
+```
+a_{0:T-1} = pi_L(h_t, o*; f_L)
+```
+
+`h_t` is the current fused L1 state `[B,18,43,43]`, `o*` is the target **visual** map `[B,16,43,43]`, `f_L` is the M2 residual conv predictor. The first action of the returned sequence is the one eventually sent to the environment.
+
+### Files
+
+```
+src/hwm_faithful/planning/config.py
+src/hwm_faithful/planning/actions.py
+src/hwm_faithful/planning/costs.py
+src/hwm_faithful/planning/mppi.py
+src/hwm_faithful/planning/level1_planner.py
+src/hwm_faithful/planning/__init__.py
+tests/test_hwm_faithful_mppi.py
+scripts/smoke_hwm_faithful_level1_mppi.py
+```
+
+### Original files / classes traced (SHA `e197375`)
+
+| Original | Role |
+| --- | --- |
+| `pldm/planning/planners/mppi_torch.py` `MPPI` | sampling, bound, perturbation cost, weights, `U` update |
+| `pldm/planning/planners/mppi_planner.py` `MPPIPlanner` | per-env controllers, `@torch.no_grad` `plan()`, one `command()` |
+| `pldm/planning/planners/mppi_planner.py` `LearnedDynamics` | T-loop of one-step `forward_multiple`; `train(False)` |
+| `pldm/planning/planners/mppi_planner.py` `RunningCost` | **actual** L1 step cost (visual MSE) |
+| `pldm/planning/objectives_v2.py` `ReprTargetMPCObjective` | target storage; linspace `__call__` is **not** the MPPI step cost |
+| `pldm/planning/planners/enums.py` `MPPIConfig`, `PlannerConfig` | defaults; YAML overrides `lambda_=0.0025` |
+| `pldm/planning/utils.py` `normalize_actions` | Euclidean-norm rescale, **not** per-component `[0,1]` clip |
+| `pldm/planning/mpc.py` | planner construction, `replan_every` env loop, `unnormalize_action` |
+| `pldm_envs/utils/normalizer.py` `unnormalize_action` | `a * std + mean` after the planner bound |
+
+### Exact MPPI equations (executed original)
+
+Let `U ∈ R^{T×2}` be the nominal plan (unbounded internally). Covariance `Σ = noise_sigma · I` with **`noise_sigma = 5` the diagonal variance**, not the std (`std = √5`).
+
+```
+ε ~ N(0, Σ)                         # [K, T, 2]
+ũ = bound(U + ε)                    # Euclidean-norm rescale into [min_step, max_step]
+ε' = ũ − U                          # clipped residual
+c_k^roll = Σ_{t=t0}^{T-1} mean_D (flatten(o_{t+1}^{(k)}) − flatten(o*))^2
+c_k^pert = λ Σ_{t,i} U_{t,i} (Σ^{-1} ε')_{k,t,i}
+c_k = c_k^roll + c_k^pert
+β = min_k c_k
+ω_k = exp(−(c_k − β) / λ) / Σ_j exp(−(c_j − β) / λ)
+U ← U + Σ_k ω_k ε'_k
+```
+
+`z_reg` is not applied at L1 (`latent_actions=False`). `noise_abs_cost=False`. `u_per_command=-1` returns the full `U`.
+
+**Refinement iterations: 1.** `MPPIPlanner.num_refinement_steps` defaults to 1 and is never looped. `plan()` calls `command(..., shift_nominal_trajectory=False)` once.
+
+### Candidate / action tensor layout
+
+| Tensor | Layout |
+| --- | --- |
+| original noise / candidates | `[K, T, 2]` per env |
+| original stacked return | `[B, T, 2]` |
+| our batched K×B rollout | candidates `[K, T, B, 2]` → model `[T, K·B, 2]` → fused `[T+1, K, B, 18, 43, 43]` |
+| returned `action_sequence` | `[B, T, 2]` (bound, then unnormalize) |
+| returned `predicted_trajectory` | `[T+1, B, 18, 43, 43]` from **unbounded** `U` (original quirk) |
+
+No Python loop over `K`. Loop over `B` matches original per-env controllers.
+
+### Action bounds / transform
+
+YAML `min_step=0`, `max_step=1`, `clamp_actions=False` does **not** clip components to `[0, 1]`.
+
+```
+coeff = min(max(||a||, 0), 1) / (||a|| + 1e-6)
+a ← a * coeff
+```
+
+Magnitude is projected onto the unit disk; direction (including negatives) is preserved. Applied (1) to sampled candidates inside MPPI and (2) to the returned plan. Then `unnormalize_action`: `a * std + mean`. M4 synthetic uses identity stats (`mean=None`). Dataset maze stats (`std ≈ 0.41`) are not invented here.
+
+Internal `U` is **not** re-bounded after the weighted update (original).
+
+Pipeline:
+
+```
+sampled internal action  →  Euclidean-norm bound  →  f_L input (candidates)
+nominal U (unbounded)    →  Euclidean-norm bound  →  unnormalize  →  env action
+```
+
+### Representation cost (executed `RunningCost`)
+
+- Cost entity: `obs_component` only → visual `[K, 16, 43, 43]`, **proprio excluded**.
+- `mean` over flattened feature dim of squared error (MSE), then **sum** selected timesteps.
+- `h0` is not costed. MPPI costs the state **after** each dynamics step (`ĥ_1 … ĥ_T`).
+- `sum_all_diffs=true` → every predicted step, equal weights.
+- `sum_all_diffs=false` → last `sum_last_n` (default 3) predicted steps.
+- YAML `loss_coeff_first` / `loss_coeff_last` are **unused** on the MPPI running-cost path (they only affect `ReprTargetMPCObjective.__call__`). M4 default `apply_loss_coeff_ramp=False`.
+- Flat L1: `pred_encoder=None` (hierarchical L1-to-L2 encoder is M7, not M4).
+
+### Warm start vs receding horizon (do not confuse)
+
+1. **Inside `plan()` (implemented):** `shift_nominal_trajectory=False` on `command()`. If `plan_size < last_plan_size`, shift `U` that many times then `change_horizon`. Hierarchical L1 horizon is typically fixed at `l2_step_skip=10`, so this often no-ops.
+2. **Env loop (`mpc.py`, not implemented in M4):** replan every `replan_every=4`. Between replans, execute `planned_actions[j, 0]` from `actions[:, i % replan_every:]`. That is **not** MPPI's internal shift.
+
+`Level1MPPIPlanner.shift_nominal_trajectory()` exists for later env callers; `plan()` does not call it.
+
+### No-grad
+
+`Level1MPPIPlanner.plan` is `@torch.no_grad()`. Predictor `train(False)` during planning, then restored. Matches `MPPIPlanner.plan` + `LearnedDynamics.before/after_planning_callback`.
+
+### Mapping to `pi_L`
+
+```
+pi_L = Level-1 MPPI over f_L
+     ≠ BC worker in hwm_director
+```
+
+This is an online planning procedure induced by the learned Level-1 world model. That is the scientific HWM vs Director difference at the low-level controller.
+
+### Tests
+
+```
+PYTHONPATH=src python -m pytest tests/test_hwm_faithful_mppi.py -q
+PYTHONPATH=src python scripts/smoke_hwm_faithful_level1_mppi.py
+```
+
+Results (CPU, 2026-09-09): **24 passed in 93.50s**.
+
+Toy additive dynamics (`s ← s + a`, target `[0.6, 0]`, K=48, T=3): **initial cost 0.540000 → optimized 0.035837**.
+
+HWM random-weight smoke (K=8, T=3, B=1): fused `[1,18,43,43]`, target `[1,16,43,43]`, candidates `[8,3,2]`, trajectory `[4,1,18,43,43]`, exec cost **8.165 → 8.132**, returned actions `[1,3,2]`, finite, no grads.
+
+### Differences from original
+
+- Clean modules instead of copying UM-ARM-Lab `mppi_torch` / `LearnedDynamics`.
+- `K` candidates rolled with M2 `predictor.rollout` (batched) rather than a Python T-loop of one-step `forward_multiple`. Recurrence is the same.
+- Diagonal `Σ` sampled as `N(0,1)*√noise_sigma` instead of `MultivariateNormal` (identical for `diag(5,5)`).
+- Bound applied to the full `[K,T,2]` tensor. Original `_slice_control` indexes `T` as if it were flattened `T·ν`; for `ν=2` it still covers every timestep, but is a leftover bug. Values match if each vector is independently norm-rescaled.
+- Identity action unnormalize unless dataset `mean`/`std` are passed. No `.cuda()`.
+- No ensemble, latent `z`, `pred_encoder`, `z_reg` (L1 unused), or env/MPC loop.
+- `MPPIConfig.lambda_` dataclass default in original is `0.005`; released Diverse Maze planning YAML uses **`0.0025`**. We follow the YAML.
+
+### Not in M4
+
+Level-2 world model, latent `z`, Level-2 MPPI, hierarchical planner, Diverse Maze eval, full training, AntMaze, BC worker, `Q_H`, SoftReach, RSSM, datasets, PACE jobs. **M5 is not started.**
 

@@ -1,5 +1,6 @@
 """Faithful HWM model modules."""
 
+from hwm_faithful.losses import Level1Objective, Level1ObjectiveOutput
 from hwm_faithful.models.action_encoder import PrimitiveActionEncoder
 from hwm_faithful.models.conv_predictor import (
     Level1Predictor,
@@ -12,6 +13,8 @@ from hwm_faithful.models.proprio import ProprioExpander
 from hwm_faithful.models.visual_encoder import VisualEncoder
 
 __all__ = [
+    "Level1Objective",
+    "Level1ObjectiveOutput",
     "Level1Encoder",
     "Level1EncoderOutput",
     "Level1Predictor",

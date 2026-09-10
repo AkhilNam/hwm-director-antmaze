@@ -132,6 +132,7 @@ def _validate_image(image: torch.Tensor) -> None:
         )
     b, c, h, w = image.shape
     if c != IMAGE_CHANNELS or h != IMAGE_SIZE or w != IMAGE_SIZE:
+        
         raise ValueError(
             f"image must have shape [B, {IMAGE_CHANNELS}, {IMAGE_SIZE}, "
             f"{IMAGE_SIZE}], got {tuple(image.shape)}"
