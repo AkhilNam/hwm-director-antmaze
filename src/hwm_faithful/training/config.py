@@ -86,7 +86,9 @@ class Level1TrainConfig:
     weight_decay: float = ADAM_WEIGHT_DECAY
     # YAML omits ``optimizer_schedule`` → TrainConfig default Cosine.
     optimizer_schedule: str = "cosine"
-    include_idm_in_optimizer: bool = True
+    # Original OptimizerFactory Adam param groups are only HJEPA level1/level2.
+    # IDMObjective is a separate Module; its head is NOT in that optimizer.
+    include_idm_in_optimizer: bool = False
     grad_clip: float | None = None  # original train.py does not clip
     mixed_precision: bool = False  # original has no AMP
 

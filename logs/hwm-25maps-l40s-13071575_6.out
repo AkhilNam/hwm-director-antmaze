@@ -1,0 +1,37 @@
+---------------------------------------
+Begin Slurm Prolog: Sep-10-2026 16:07:34
+Job ID:    13071603
+User ID:   anampally3
+Account:   gts-awu36-paid
+Job name:  hwm-25maps-l40s
+Partition: gpu-v100
+QOS:       inferno
+---------------------------------------
+START shard 6/8 Thu Sep 10 16:07:34 EDT 2026 host=atl1-1-03-006-31-0.pace.gatech.edu job=13071603
+date:     Thu Sep 10 16:07:34 EDT 2026
+hostname: atl1-1-03-006-31-0.pace.gatech.edu
+partition:gpu-v100 gres=
+worker:   6  episodes [33719, 39339)
+out:      /storage/scratch1/2/anampally3/hwm-original-repro/pldm_envs/diverse_maze/datasets/maze2d_large_diverse_25maps/images.npy
+GPU 0: Tesla V100-PCIE-32GB (UUID: GPU-3f693cbf-a911-6155-5181-07803f572fd2)
+episodes_total=44959 frames_total=4540859 shard=[33719,39339) worker=6
+opened existing (4540859, 98, 98, 3) /storage/scratch1/2/anampally3/hwm-original-repro/pldm_envs/diverse_maze/datasets/maze2d_large_diverse_25maps/images.npy
+Found 4 GPUs for rendering. Using device 0.
+w=6 episode 33719/39338 written=101 rate=74.47/s eta_h=2.12
+w=6 episode 33729/39338 written=1111 rate=117.93/s eta_h=1.33
+w=6 episode 33739/39338 written=2121 rate=119.91/s eta_h=1.31
+w=6 episode 33749/39338 written=3131 rate=120.81/s eta_h=1.30
+w=6 episode 33759/39338 written=4141 rate=122.19/s eta_h=1.28
+w=6 episode 33769/39338 written=5151 rate=125.49/s eta_h=1.25
+w=6 episode 33779/39338 written=6161 rate=127.66/s eta_h=1.22
+w=6 episode 33789/39338 written=7171 rate=129.31/s eta_h=1.20
+w=6 episode 33799/39338 written=8181 rate=130.21/s eta_h=1.19
+w=6 episode 33809/39338 written=9191 rate=130.93/s eta_h=1.18
+w=6 episode 33819/39338 written=10201 rate=131.57/s eta_h=1.18
+w=6 episode 33829/39338 written=11211 rate=132.28/s eta_h=1.17
+w=6 episode 33839/39338 written=12221 rate=132.87/s eta_h=1.16
+w=6 episode 33849/39338 written=13231 rate=133.21/s eta_h=1.16
+w=6 episode 33859/39338 written=14241 rate=133.54/s eta_h=1.15
+w=6 episode 33869/39338 written=15251 rate=134.01/s eta_h=1.14
+w=6 episode 33879/39338 written=16261 rate=134.32/s eta_h=1.14
+w=6 episode 33889/39338 written=17271 rate=134.30/s eta_h=1.14

@@ -1,0 +1,37 @@
+---------------------------------------
+Begin Slurm Prolog: Sep-10-2026 16:07:34
+Job ID:    13071602
+User ID:   anampally3
+Account:   gts-awu36-paid
+Job name:  hwm-25maps-l40s
+Partition: gpu-v100
+QOS:       inferno
+---------------------------------------
+START shard 5/8 Thu Sep 10 16:07:34 EDT 2026 host=atl1-1-03-002-31-0.pace.gatech.edu job=13071602
+date:     Thu Sep 10 16:07:34 EDT 2026
+hostname: atl1-1-03-002-31-0.pace.gatech.edu
+partition:gpu-v100 gres=
+worker:   5  episodes [28099, 33719)
+out:      /storage/scratch1/2/anampally3/hwm-original-repro/pldm_envs/diverse_maze/datasets/maze2d_large_diverse_25maps/images.npy
+GPU 0: Tesla V100-PCIE-32GB (UUID: GPU-f57406a8-cb96-50c3-cd96-fc1d7fb6b161)
+episodes_total=44959 frames_total=4540859 shard=[28099,33719) worker=5
+opened existing (4540859, 98, 98, 3) /storage/scratch1/2/anampally3/hwm-original-repro/pldm_envs/diverse_maze/datasets/maze2d_large_diverse_25maps/images.npy
+Found 4 GPUs for rendering. Using device 0.
+w=5 episode 28099/33718 written=101 rate=78.46/s eta_h=2.01
+w=5 episode 28109/33718 written=1111 rate=118.33/s eta_h=1.33
+w=5 episode 28119/33718 written=2121 rate=121.14/s eta_h=1.30
+w=5 episode 28129/33718 written=3131 rate=121.58/s eta_h=1.29
+w=5 episode 28139/33718 written=4141 rate=121.80/s eta_h=1.29
+w=5 episode 28149/33718 written=5151 rate=125.24/s eta_h=1.25
+w=5 episode 28159/33718 written=6161 rate=127.35/s eta_h=1.22
+w=5 episode 28169/33718 written=7171 rate=129.24/s eta_h=1.20
+w=5 episode 28179/33718 written=8181 rate=130.49/s eta_h=1.19
+w=5 episode 28189/33718 written=9191 rate=131.28/s eta_h=1.18
+w=5 episode 28199/33718 written=10201 rate=132.27/s eta_h=1.17
+w=5 episode 28209/33718 written=11211 rate=132.93/s eta_h=1.16
+w=5 episode 28219/33718 written=12221 rate=133.54/s eta_h=1.16
+w=5 episode 28229/33718 written=13231 rate=133.51/s eta_h=1.15
+w=5 episode 28239/33718 written=14241 rate=133.97/s eta_h=1.15
+w=5 episode 28249/33718 written=15251 rate=134.51/s eta_h=1.14
+w=5 episode 28259/33718 written=16261 rate=134.83/s eta_h=1.14
+w=5 episode 28269/33718 written=17271 rate=134.80/s eta_h=1.13

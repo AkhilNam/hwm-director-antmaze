@@ -1,0 +1,37 @@
+---------------------------------------
+Begin Slurm Prolog: Sep-10-2026 16:07:34
+Job ID:    13071575
+User ID:   anampally3
+Account:   gts-awu36-paid
+Job name:  hwm-25maps-l40s
+Partition: gpu-v100
+QOS:       inferno
+---------------------------------------
+START shard 7/8 Thu Sep 10 16:07:34 EDT 2026 host=atl1-1-03-006-33-0.pace.gatech.edu job=13071575
+date:     Thu Sep 10 16:07:34 EDT 2026
+hostname: atl1-1-03-006-33-0.pace.gatech.edu
+partition:gpu-v100 gres=
+worker:   7  episodes [39339, 44959)
+out:      /storage/scratch1/2/anampally3/hwm-original-repro/pldm_envs/diverse_maze/datasets/maze2d_large_diverse_25maps/images.npy
+GPU 0: Tesla V100-PCIE-32GB (UUID: GPU-36551540-3c57-3b3f-65d8-4b759a9770e7)
+episodes_total=44959 frames_total=4540859 shard=[39339,44959) worker=7
+opened existing (4540859, 98, 98, 3) /storage/scratch1/2/anampally3/hwm-original-repro/pldm_envs/diverse_maze/datasets/maze2d_large_diverse_25maps/images.npy
+Found 4 GPUs for rendering. Using device 0.
+w=7 episode 39339/44958 written=101 rate=62.97/s eta_h=2.50
+w=7 episode 39349/44958 written=1111 rate=114.50/s eta_h=1.37
+w=7 episode 39359/44958 written=2121 rate=119.75/s eta_h=1.31
+w=7 episode 39369/44958 written=3131 rate=121.63/s eta_h=1.29
+w=7 episode 39379/44958 written=4141 rate=121.29/s eta_h=1.29
+w=7 episode 39389/44958 written=5151 rate=124.70/s eta_h=1.25
+w=7 episode 39399/44958 written=6161 rate=127.20/s eta_h=1.23
+w=7 episode 39409/44958 written=7171 rate=128.73/s eta_h=1.21
+w=7 episode 39419/44958 written=8181 rate=129.90/s eta_h=1.20
+w=7 episode 39429/44958 written=9191 rate=130.42/s eta_h=1.19
+w=7 episode 39439/44958 written=10201 rate=131.42/s eta_h=1.18
+w=7 episode 39449/44958 written=11211 rate=132.00/s eta_h=1.17
+w=7 episode 39459/44958 written=12221 rate=132.37/s eta_h=1.17
+w=7 episode 39469/44958 written=13231 rate=132.62/s eta_h=1.16
+w=7 episode 39479/44958 written=14241 rate=133.23/s eta_h=1.15
+w=7 episode 39489/44958 written=15251 rate=133.63/s eta_h=1.15
+w=7 episode 39499/44958 written=16261 rate=133.99/s eta_h=1.14
+w=7 episode 39509/44958 written=17271 rate=133.93/s eta_h=1.14
