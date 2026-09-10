@@ -1,8 +1,8 @@
 # Faithful HWM Port Plan
 
-**Status:** Architecture plan complete. **M1 implemented**. **M2 implemented**. **M3 implemented** (Level-1 objectives + tiny synthetic overfit; no full Diverse Maze training). **M4 implemented** (Level-1 MPPI planner `pi_L` + synthetic/unit tests; no Diverse Maze eval). M5 and later are not started. No dataset regeneration, no PACE jobs.
+**Status:** Architecture plan complete. **M1–M5 implemented**. M5 is skip-10 L2 inputs + latent `z` (no `f_H`). **M6 and later are not started**. No dataset regeneration, no PACE jobs.
 
-**Date:** 2026-09-09 (M1/M2/M3/M4: 2026-09-09)
+**Date:** 2026-09-09 (M1–M4); M5: 2026-09-10
 
 **Original HWM reference:** [kevinghst/HWM_PLDM](https://github.com/kevinghst/HWM_PLDM) at SHA `e197375b844692a0a2e1342889f95a78edced07a` (read-only). Local clone used for tracing: `hwm-original-repro`.
 
@@ -609,8 +609,8 @@ Order is driven by code: L1 is a frozen encoder for L2, and hierarchical plannin
 | **M2** | L1 residual conv world model | **IMPLEMENTED** (2026-09-09). Recursive 14-step rollout `[15,B,18,43,43]`; residual on all 18 fused channels; action expand to 2 spatial channels. See Section 18. |
 | **M3** | L1 training + representation checks | **IMPLEMENTED** (2026-09-09) for **objectives + tiny overfit only**. VICRegObs+IDM+PredProprio match released L1 YAML; full Diverse Maze training and location probes are later. See Section 19. |
 | **M4** | L1 MPPI | **IMPLEMENTED** (2026-09-09). Original MPPI semantics, representation cost, synthetic + random-weight smoke. No full Diverse Maze eval. See Section 20. |
-| **M5** | L2 skip + identity backbone + conv `f_H` | Skip-10 batch → L1 encode_only → L2 residual predict |
-| **M6** | Latent `z` posterior | Train-time `z = posterior(actions_chunk)`; shape `[B,8]`; L2 conditioned on `z` not on `a` |
+| **M5** | L2 skip-10 + identity backbone + latent `z` | **IMPLEMENTED** (2026-09-10). Temporal abstraction, posterior, action encoder `8-64-8`. **No `f_H`.** See Section 21. |
+| **M6** | L2 residual conv predictor `f_H` | `H_τ, z_τ → Ĥ_{τ+1}` with `l2_d4rl_e_p`; not started |
 | **M7** | Hierarchical MPPI | `pred_obs[1]` as L1 target; replan_every=4; action_repeat=4; final 15-step L1 |
 | **M8** | End-to-end Diverse Maze eval | medium + hard, 40 envs, success `< 0.5` m |
 | **M9** | Compare to original-code reproduction | Target: medium **82.5%**, hard **90.0%**. Report gaps; do not tune on AntMaze |
@@ -1207,5 +1207,142 @@ HWM random-weight smoke (K=8, T=3, B=1): fused `[1,18,43,43]`, target `[1,16,43,
 
 ### Not in M4
 
-Level-2 world model, latent `z`, Level-2 MPPI, hierarchical planner, Diverse Maze eval, full training, AntMaze, BC worker, `Q_H`, SoftReach, RSSM, datasets, PACE jobs. **M5 is not started.**
+Level-2 world model, latent `z`, Level-2 MPPI, hierarchical planner, Diverse Maze eval, full training, AntMaze, BC worker, `Q_H`, SoftReach, RSSM, datasets, PACE jobs. Level-2 skip/`z` is M5 (Section 21).
+
+---
+
+## 21. M5 implementation (L2 skip-10 inputs and latent `z`)
+
+**Status: IMPLEMENTED** for temporal abstraction, identity L2 state, train-time posterior, and L2 action encoder. **No Level-2 predictor `f_H`.** M6 is not started.
+
+### Files
+
+```
+src/hwm_faithful/level2/temporal_abstraction.py
+src/hwm_faithful/level2/identity.py
+src/hwm_faithful/level2/posterior.py
+src/hwm_faithful/level2/action_encoder.py
+src/hwm_faithful/level2/freeze.py
+src/hwm_faithful/level2/__init__.py
+tests/test_hwm_faithful_level2_inputs.py
+scripts/smoke_hwm_faithful_level2_inputs.py
+```
+
+### Original files / classes traced (SHA `e197375`)
+
+| Original | Role |
+| --- | --- |
+| `pldm_envs/diverse_maze/d4rl.py` `D4RLDataset` | `l2_n_steps_total = 6*10+1 = 61`; image/proprio **skip 10**; actions **no skip** then `split(10)` |
+| `large_diverse_25maps_l2.yaml` | `l2_step_skip=10`, `l2_n_steps=6`, `chunked_actions=true`, `stack_states=1` |
+| `pldm/models/encoders/encoders.py` `IdentityEncoder` | concat L1 `obs_component` + `proprio_component`; 0 params |
+| `pldm/models/hjepa.py` `HJEPA.forward_posterior` | frozen L1 `encode_only=True` on already-subsampled `l2_states` |
+| `pldm/models/jepa.py` | L2 `posterior_input_dim = l1_action_dim * step_skip` (=20) |
+| `pldm/models/misc.py` `PosteriorContinuous`, `MLP` | 20→32→32→16, LayerNorm(mu), softplus+min_std |
+| `pldm/models/predictors/sequence_predictor.py` | flatten chunk; **`z = mu`**; `sample()` unused |
+| `pldm/models/predictors/conv_predictors.py` `ConvPredictor` | `action_encoder_arch='8-64-8'` then `Expander2D` |
+| `pldm/train.py` | `freeze_l1`: `requires_grad=False` on all L1 params |
+
+### Exact state subsampling
+
+Window length 61. Images/proprio/locations: `[start : start+61 : 10]`.
+
+L2 states are L1 times **0, 10, 20, 30, 40, 50, 60** relative to the window → **7** tensors `[7, B, 18, 43, 43]` after identity concat.
+
+This is **not** encoding every L1 frame then pooling. The dataset already drops 9 of every 10 images; frozen L1 encodes only those 7 frames. Subsampling an already-encoded dense fused sequence at the same indices is equivalent (deterministic encoder).
+
+L2 identity backbone adds **no** extra proprio expander and **no** normalization. Input is L1 visual `[B,16,43,43]` + L1 proprio map `[B,2,43,43]` → fused `[B,18,43,43]`.
+
+### Exact action chunk boundaries
+
+Primitive actions: `actions[start : start+60]` (**`skip_frame` is not applied to actions**).
+
+Then `split(l2_step_skip=10)`:
+
+| chunk | L1 action indices | connects |
+| --- | --- | --- |
+| 0 | `[0:10]` | `H_0` (t=0) → `H_1` (t=10) |
+| 1 | `[10:20]` | t=10 → 20 |
+| 2 | `[20:30]` | |
+| 3 | `[30:40]` | |
+| 4 | `[40:50]` | |
+| 5 | `[50:60]` | t=50 → 60 |
+
+Shape after original stack + batch transpose: `[6, B, 10, 2]`.
+
+### Flatten order
+
+`view(B, -1)` on `[B, 10, 2]` is C-order:
+
+```
+[a_0x, a_0y, a_1x, a_1y, ..., a_9x, a_9y] ∈ R^20
+```
+
+YAML `posterior_input_dim: 20` is overwritten in `JEPA.__init__` by `2 * 10`; same value.
+
+### Posterior architecture
+
+```
+20 → Linear+ReLU 32 → Linear+ReLU 32 → Linear 16
+chunk → (mu, std_raw) each R^8
+mu  = LayerNorm(8)(mu)
+std = softplus(std_raw) + 0.05
+z   = mu
+```
+
+No BatchNorm (`MLP` default `norm=None`). Live original `PosteriorContinuous`: **2272** params. Ours: **2272**.
+
+### Meaning of `z`
+
+`z ∈ R^8` is the **Level-2 action / macro-action**.
+
+- **Not** an (x, y) subgoal
+- **Not** a state representation
+- **Not** a learned high-level policy output
+
+**Train:** 10 primitive actions → posterior → `z`.  
+**Plan (later M7):** L2 MPPI proposes `z` directly; the posterior is not used.
+
+### Deterministic semantics and `z_min_std`
+
+Released `z_stochastic=false`. Executed `SequencePredictor.forward_multiple` sets `posterior = posterior_mu` with **no** `rsample`. `PosteriorContinuous.sample()` exists and is unused on this path.
+
+`z_min_std=0.05` still enters `std = softplus(std_raw) + 0.05`. That `std` is stored (`posterior_vars`) but does **not** affect `z`. Released L2 objectives have **no KL**, so the std half of the last linear gets **no prediction-loss gradient**.
+
+### Action encoder `8-64-8` (separate from posterior)
+
+```
+z [B,8]
+  Linear 8→64 + ReLU
+  Linear 64→8            # last ReLU removed
+  Expander2D → [B, 8, 43, 43]
+```
+
+The arch string **includes the input width** (unlike `posterior_arch='32-32'`). Live original: **1096** params. Ours: **1096**. Identity backbone: **0**.
+
+### Freeze L1
+
+`freeze_l1=true` sets `requires_grad=False` on every L1 parameter. It does not call `eval()`. L2 posterior and action encoder remain trainable.
+
+### Tests
+
+```
+PYTHONPATH=src python -m pytest tests/test_hwm_faithful_level2_inputs.py -q
+PYTHONPATH=src python scripts/smoke_hwm_faithful_level2_inputs.py
+```
+
+Results (CPU, 2026-09-10): **15 passed in 3.25s**.
+
+Smoke: L1 fused `[61,2,18,43,43]` → L2 states `[7,2,18,43,43]`, chunks `[6,2,10,2]`, flat `[6,2,20]`, `z` `[6,2,8]`, encoded spatial `[6,2,8,43,43]`; indices `(0,10,...,60)`; first chunk `[0,10)`; posterior 2272; action encoder 1096; identity 0; repeated `z` equal; L1 frozen trainable=0 / no param grads; posterior + action-encoder MLP grads yes.
+
+### Differences from original
+
+- Clean modules; no `SequencePredictor` / `ConvPredictor` / dataset I/O.
+- `ReLU()` not `ReLU(inplace=True)` (values identical).
+- Dense fused + subsample is supported as equivalent to original “subsample images then encode”.
+- `f_H`, L2 losses, L2 MPPI not implemented.
+- Optional `stochastic=True` exists for tests; released path is deterministic `z=mu`.
+
+### Not in M5
+
+Level-2 conv predictor `f_H`, L2 losses, L2 MPPI, hierarchical planner, Diverse Maze eval, full training, AntMaze, datasets, PACE jobs. **M6 is not started.**
 
