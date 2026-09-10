@@ -6,6 +6,7 @@ M4: Level-1 MPPI planner (``pi_L``).
 M5: Level-2 skip-10 inputs and latent action ``z``.
 M6: Level-2 residual predictor ``f_H``.
 M7: Level-2 MPPI planner ``pi_H`` and hierarchical handoff.
+M8: Diverse Maze data, normalization, goal, and eval interface.
 The simplified raw-state baseline remains in ``hwm_director`` and is not
 imported here.
 """
@@ -31,6 +32,15 @@ from hwm_faithful.planning.level2_planner import Level2MPPIPlanner, Level2PlanRe
 from hwm_faithful.losses.level2_objective import (
     Level2ObjectiveOutput,
     level2_prediction_losses,
+)
+from hwm_faithful.data import (
+    DiverseMazeEnvAdapter,
+    DiverseMazeOfflineDataset,
+    MazeNormalizer,
+    encode_goal,
+    load_probe_dataset,
+    load_starts_targets,
+    success_from_distance,
 )
 from hwm_faithful.level2 import (
     Level2ActionEncoder,
@@ -69,4 +79,11 @@ __all__ = [
     "Level2Predictor",
     "Level2WorldModel",
     "build_level2_inputs",
+    "DiverseMazeEnvAdapter",
+    "DiverseMazeOfflineDataset",
+    "MazeNormalizer",
+    "encode_goal",
+    "load_probe_dataset",
+    "load_starts_targets",
+    "success_from_distance",
 ]

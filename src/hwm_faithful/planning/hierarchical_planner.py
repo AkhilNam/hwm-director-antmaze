@@ -54,10 +54,16 @@ class HierarchicalPlanner:
         h_config: HierarchicalPlannerConfig | None = None,
         *,
         n_envs: int | None = None,
+        action_mean: torch.Tensor | None = None,
+        action_std: torch.Tensor | None = None,
     ) -> None:
         self.h_config = h_config or HierarchicalPlannerConfig()
         self.l1_planner = Level1MPPIPlanner(
-            l1_predictor, l1_config, n_envs=n_envs
+            l1_predictor,
+            l1_config,
+            n_envs=n_envs,
+            action_mean=action_mean,
+            action_std=action_std,
         )
         self.l2_planner = Level2MPPIPlanner(
             l2_predictor, l2_config, n_envs=n_envs

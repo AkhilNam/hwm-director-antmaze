@@ -1,8 +1,8 @@
 # Faithful HWM Port Plan
 
-**Status:** Architecture plan complete. **M1–M7 implemented**. M7 is Level-2 MPPI `pi_H` plus hierarchical handoff. **M8 (Diverse Maze env eval) is not started**. No dataset regeneration, no PACE jobs.
+**Status:** Architecture plan complete. **M1–M8 implemented**. M8 is the real Diverse Maze data / eval substrate (no training, no 40-env eval). Env `reset`/`step` smoke is implemented but blocked on this login node by `mujoco_py` GL (no OSMesa headers, no GPU). No dataset regeneration, no full training, no large PACE jobs.
 
-**Date:** 2026-09-09 (M1–M4); M5–M7: 2026-09-10
+**Date:** 2026-09-09 (M1–M4); M5–M8: 2026-09-10
 
 **Original HWM reference:** [kevinghst/HWM_PLDM](https://github.com/kevinghst/HWM_PLDM) at SHA `e197375b844692a0a2e1342889f95a78edced07a` (read-only). Local clone used for tracing: `hwm-original-repro`.
 
@@ -1700,5 +1700,153 @@ Hierarchy smoke (L2 K=8 T2=3, L1 K=8 T=10): L1 target `[1,16,43,43]`, primitives
 
 ### Not in M7
 
-Full Diverse Maze evaluation, dataset percentile bound computation, L1/L2 training, AntMaze, PACE jobs. **M8 is not started.**
+Full Diverse Maze evaluation, dataset percentile bound computation, L1/L2 training, AntMaze, PACE jobs.
+
+---
+
+## M8. Diverse Maze data / eval substrate (IMPLEMENTED)
+
+M8 wires `hwm_faithful` to the **same** Diverse Maze pickle, `images.npy`, start/target files, hard-set normalizer, and environment package as original HWM. It does **not** train, does **not** run 40 medium + 40 hard evals, and does **not** regenerate data.
+
+Code: `src/hwm_faithful/data/`. Baseline `src/hwm_director/` is untouched. Original HWM source is read-only.
+
+### Dataset files (existing; not copied)
+
+| Asset | Path | Status on this machine |
+| --- | --- | --- |
+| 25-map pickle | `hwm-original-repro/pldm_envs/diverse_maze/datasets/maze2d_large_diverse_25maps/data.p` | present (263M, 44959 episodes) |
+| 25-map `images.npy` | YAML `/scratch/wz1232/data/maze2d_large_diverse_25maps/images.npy` | **missing locally** (~4.54M frames, would be tens of GB). Do not regenerate. Do not `np.load` without mmap. |
+| 25-map PNG subset | `.../maze2d_large_diverse_25maps/images/` | 45012 PNGs only; not the training corpus |
+| Probe pickle | `.../maze2d_large_diverse_probe/data.p` | present (1000 episodes) |
+| Probe `images.npy` | `.../maze2d_large_diverse_probe/images.npy` | present, **2.91 GB**, mmap |
+| Probe PNGs | `.../maze2d_large_diverse_probe/images/` | 101000 PNGs (same frames as npy) |
+| Medium starts | `starts_targets_9_12.pt` | present, 40 trials |
+| Hard starts | `starts_targets_13_16.pt` | present, 40 trials |
+| Easy starts | `starts_targets_5_8.pt` | present, 40 trials |
+
+M8 smokes use the **probe** corpus. Training `images.npy` lives only on the authors' `/scratch/wz1232/data/...` (and possibly a GPU filesystem from the original PACE repro).
+
+### Dataset structure (traced, not guessed)
+
+`torch.load(data.p)` → `list[dict]`:
+
+- `observations`: `[101, 4]` float64 `(x, y, vx, vy)`
+- `actions`: `[100, 2]` float32, raw roughly in `[-1, 1]`
+- `map_idx`: int (0–24 on 25-map set)
+
+`images.npy`: **uint8 NHWC** `[N, 98, 98, 3]`. Probe `N=101000` matches `1000 * 101`. Sample min/max **25 / 227** (not a full 0–255 span). Original loader: `np.load(..., mmap_mode="r")`.
+
+Train/val: `val_fraction=0.2` is **unused**. `DatasetFactory._create_d4rl_datasets` sets `val_ds=None`. The 25-map pickle is the training set; probe is a separate probing/eval set. `crop_length=null` for train.
+
+Episode boundaries: `cum_lengths` of `len(obs) - max(n_steps, 61) - (stack_states-1)` valid window starts. Probe with L2: 40 starts/episode → 40000 windows.
+
+### Image preprocessing
+
+**Stored images (training/probe npy):** already 98×98. No crop, no resize, no `/255`, no stacking (`stack_states=1`).
+
+```
+uint8 NHWC → float32 NCHW  (values stay ~[0, 255])
+then (x - state_mean[:,None,None]) / (state_std[:,None,None] + 1e-6)
+```
+
+**Live env images:** `render_umaze` → `CenterCrop(426)` → `Resize(98)` → NCHW → same `normalize_state`. Goal image is rendered at the target xy with **zero velocity**, `set_to_obs=False` (state restored).
+
+M1 still sees `[B, 3, 98, 98]` **after** this affine. Numerical parity vs original `normalize_state`: exact (atol 0) on a random uint8 frame.
+
+### Proprio preprocessing
+
+Field: maze `observations[:, 2:]` = `(vx, vy)`. Position is **excluded** from the encoder (empty `proprio_pos`). Eval: `get_proprio_vel` from `qvel`. Normalized with hard-set vel mean/std. Goal proprio for MPPI is **zeros** (`get_target_proprio`).
+
+### Action normalize / unnormalize
+
+Training collate: `(a - mean) / (std + 1e-6)`.
+Unnormalize (planner → env): `a * std + mean` (**no** epsilon).
+MPPI plans in normalized space, then `unnormalize_action` before `env.step`. YAML `action_repeat=4`, `mode='id'` (four identical physics steps per wrapper step).
+
+### Hard-set stats (`normalizer_hardset=true`, `env_name=maze2d_large_diverse`)
+
+| field | mean | std |
+| --- | --- | --- |
+| state (RGB) | `[146.5709, 120.0509, 93.3956]` | `[84.9847, 45.3689, 10.3962]` |
+| action | `[0.0004, -0.0022]` | `[0.4095, 0.4082]` |
+| location | `[4.3646, 4.2948]` | `[2.3662, 2.3378]` |
+| proprio_pos | `[0, 0]` | `[0, 0]` (unused; maze pos empty) |
+| proprio_vel | `[-0.0291, -0.0461]` | `[1.4084, 1.4102]` |
+
+`min_max_state` is off. Sample-estimated stats in `build_normalizer` are discarded when hard-set fires.
+
+### L1 / L2 windows
+
+L1: images `[15, 3, 98, 98]`, proprio `[15, 2]`, actions `[14, 2]`, xy `[15, 2]`.
+
+L2 primitive: 61 images / 60 actions. Then skip-10 → 7 states, 6 chunks of 10. Original `__getitem__` skip-samples L2 **images/proprio** and chunks **unskipped** actions. Our loader exposes the dense 61-step window and reuses `build_level2_inputs`. Indexing matches original `D4RLDataset[0]` on probe (tested).
+
+### Goal representation
+
+`encode_goal(encoder, goal_image, proprio=zeros)` → visual `[B, 16, 43, 43]`. Same as `mpc._encode_targets` + L2 identity encoder (no-op). Planner target is visual-only. xy is metrics-only.
+
+### Start/target files
+
+Dict: `starts`, `targets` (each `(2,)` xy), `map_layouts` (ASCII maze strings), `block_dists`, `turns`. Length 40. Medium trial 0: start `[3.19, 6.01]`, target `[8.06, 2.65]`, block_dist 10, turns 5.
+
+### Environment adapter
+
+`DiverseMazeEnvAdapter` wraps original `Maze2DEnvsGenerator` / `NormEvalWrapper` / `ActionRepeatWrapper`. Observations from the wrapper are **already** normalized. `step_normalized` unnormalizes with hard-set action stats; `step_raw` is for planner output that already unnormalized (M4/M7). `n_envs` default 1.
+
+### Success metric
+
+**Conceptual:** `success = ||xy - target_xy||_2 < 0.5`.
+
+**Executed original path:** `CustomMazeEnv._is_goal_reached(threshold=0.5)` sets binary **reward**; `HierarchicalD4RLMPCEvaluator._construct_report` counts success if reward became true before horizon `T`.
+
+### Copied-weight parity (architecture only; not the deployed model)
+
+Random original weights copied by Conv2d/GroupNorm/Linear/LayerNorm order:
+
+| module | result |
+| --- | --- |
+| L1 encoder (`MeNet6` → ours) | match rtol 1e-5 |
+| L1 predictor (`ConvPredictor d4rl_b_p`) | match |
+| posterior (`PosteriorContinuous 32-32`) | mu/std/z match |
+| L2 action encoder (`8-64-8`) | spatial map match |
+| L2 predictor (`l2_d4rl_e_p`) | one-step H match |
+
+### Real forwards (probe, untrained weights, no optimizer)
+
+L1: fused/rollout `[15, 2, 18, 43, 43]` finite. Losses (B=2 duplicate for VICReg): total **67.672**, vicreg_obs 38.908, idm 10.875, prediction_proprio 17.889.
+
+L2: `H_gt [7,1,18,43,43]`, chunks `[6,1,10,2]`, `z [6,1,8]`, `H_pred [7,1,18,43,43]`. Losses: total **15.822**, prediction_obs 5.398, prediction_proprio 10.425.
+
+### Memory
+
+`np.load(images.npy, mmap_mode='r')`. Windows copy only the requested 15 or 61 frames. Probe mmap is 2.91 GB on disk; we do not materialize it. Do **not** `np.load` the missing 25-map `images.npy` if it appears later without mmap.
+
+### Tests
+
+```
+PYTHONPATH=src python -m pytest tests/test_hwm_faithful_diverse_maze_data.py tests/test_hwm_faithful_diverse_maze_parity.py -q
+PYTHONPATH=src python scripts/smoke_hwm_faithful_m8_real_data.py
+```
+
+**19 passed** (2026-09-10), including probe integration and original-code parity. Planner regression: 46 passed.
+
+Hierarchical one-action on real encoded probe frames (K=4, untrained): L1 target `[1,16,43,43]`, primitives `[1,10,2]`, first unnormalized action `[-0.0484, 0.4031]`, finite.
+
+Pure unit tests use a tiny synthetic pickle+npy. Probe/original-import tests skip if those paths are missing.
+
+### Env reset/step smoke (gap)
+
+Implemented. On this login node `mujoco_py` selects `LinuxCPUExtensionBuilder` (no NVIDIA) and fails compiling `osmesashim.c` (`GL/osmesa.h` missing). Original PACE eval used a GPU runtime. Hierarchical one-action smoke still runs on **real encoded probe frames** (K=4) without env. Adapter `reset`/`step` should be re-run on a GPU node with `LD_LIBRARY_PATH` including `~/.mujoco/mujoco210/bin`. No large PACE job submitted.
+
+### Remaining gaps before full training
+
+- Local 25-map `images.npy` (mmap the existing file on the filesystem that has it; do not regenerate).
+- GPU-node env reset/step + one real `env.step` of an unnormalized primitive.
+- Dataset percentile L2 z bounds (eval-time, not M8).
+- Actual L1 then L2 training (M9+).
+- 40 medium + 40 hard eval vs 82.5% / 90.0%.
+
+### Not in M8
+
+L1/L2 training, loading original HWM as our model, full medium/hard eval, dataset regeneration, PACE training jobs.
 
