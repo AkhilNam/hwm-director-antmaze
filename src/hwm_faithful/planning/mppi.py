@@ -12,18 +12,18 @@ Williams et al. 2017 as copied into HWM (UM-ARM-Lab / pytorch_mppi):
 
 One ``command()`` = one sample-and-update. ``num_refinement_steps`` is stored
 in original ``MPPIPlanner`` but never looped. L1 ``z_reg_coeff`` is unused
-because ``latent_actions`` is false.
+because ``latent_actions`` is false. L2 computes ``z_reg`` but does not add
+it to ``cost_total`` (``apply_z_reg=False``).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import torch
 
 from hwm_faithful.planning.actions import rescale_action_norm
-from hwm_faithful.planning.config import Level1MPPIConfig
 from hwm_faithful.shapes import ACTION_DIM
 
 
@@ -90,13 +90,14 @@ class MPPI:
 
     def __init__(
         self,
-        config: Level1MPPIConfig,
+        config: Any,
         action_dim: int = ACTION_DIM,
         *,
         device: torch.device | None = None,
         dtype: torch.dtype = torch.float32,
         generator: torch.Generator | None = None,
         horizon: int = 15,
+        bound_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
     ) -> None:
         self.config = config
         self.action_dim = int(action_dim)
@@ -108,6 +109,7 @@ class MPPI:
         self.T = int(horizon)
         self.u_init = torch.zeros(self.action_dim, device=self.device, dtype=self.dtype)
         self.U = self._init_U(self.T)
+        self.bound_fn = bound_fn
 
     def _init_U(self, horizon: int) -> torch.Tensor:
         return sample_noise(
@@ -159,12 +161,7 @@ class MPPI:
             dtype=self.U.dtype,
             generator=self.generator,
         )
-        perturbed = bound_plan(
-            self.U.unsqueeze(0) + noise,
-            cfg.min_step,
-            cfg.max_step,
-            clamp_components=cfg.clamp_actions,
-        )
+        perturbed = self._bound(self.U.unsqueeze(0) + noise)
         bounded_noise = perturbed - self.U.unsqueeze(0)
         sigma_inv = 1.0 / cfg.noise_sigma
         action_cost = cfg.lambda_ * bounded_noise * sigma_inv
@@ -186,4 +183,15 @@ class MPPI:
             perturbation_costs=perturbation_cost,
             noise=bounded_noise,
             perturbed_actions=perturbed,
+        )
+
+    def _bound(self, actions: torch.Tensor) -> torch.Tensor:
+        if self.bound_fn is not None:
+            return self.bound_fn(actions)
+        cfg = self.config
+        return bound_plan(
+            actions,
+            cfg.min_step,
+            cfg.max_step,
+            clamp_components=cfg.clamp_actions,
         )

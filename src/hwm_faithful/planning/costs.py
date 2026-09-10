@@ -133,3 +133,24 @@ def validate_visual(x: torch.Tensor, name: str = "visual") -> None:
             f"{name} must have shape [..., {VISUAL_CHANNELS}, {FEATURE_SIZE}, "
             f"{FEATURE_SIZE}], got {tuple(x.shape)}"
         )
+
+
+def z_regularization(
+    z: torch.Tensor,
+    coeff: float = 0.1,
+) -> torch.Tensor:
+    """Original latent-action NLL toward ``N(0, 1)``, per candidate.
+
+    ``z`` is ``[K, T, 8]`` (bound sampled macros). Original:
+
+        z_reg = -Normal(0, 1).log_prob(actions).mean(dim=(1, 2)) * coeff
+
+    This is **computed** when ``latent_actions`` is true, then **never
+    added** to ``cost_total``. Keep ``coeff`` for diagnostics.
+    """
+    if z.ndim != 3:
+        raise ValueError(f"z must be [K, T, nu], got {tuple(z.shape)}")
+    prior = torch.distributions.Normal(
+        torch.zeros_like(z), torch.ones_like(z)
+    )
+    return -prior.log_prob(z).mean(dim=(1, 2)) * coeff

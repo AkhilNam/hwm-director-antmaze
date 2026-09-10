@@ -1,8 +1,6 @@
-"""Level-2 input construction and latent action ``z`` (M5).
+"""Level-2 temporal abstraction, latent ``z``, and residual predictor ``f_H``.
 
-``z`` is the L2 **macro-action**, inferred at train time from a 10-step
-primitive chunk. It is not a subgoal, not a state, and not a policy head.
-Planning later samples ``z`` with L2 MPPI and does not use this posterior.
+``z`` is the L2 macro-action. ``f_H(H, z) → Ĥ_next`` is the L2 world model.
 """
 
 from hwm_faithful.level2.action_encoder import (
@@ -12,6 +10,11 @@ from hwm_faithful.level2.action_encoder import (
 from hwm_faithful.level2.freeze import freeze_module
 from hwm_faithful.level2.identity import Level2IdentityEncoder
 from hwm_faithful.level2.posterior import Level2ActionPosterior, PosteriorOutput
+from hwm_faithful.level2.predictor import (
+    Level2Predictor,
+    Level2PredictorOutput,
+    Level2RolloutOutput,
+)
 from hwm_faithful.level2.temporal_abstraction import (
     Level2Inputs,
     Level2TemporalConfig,
@@ -20,6 +23,7 @@ from hwm_faithful.level2.temporal_abstraction import (
     flatten_action_chunk,
     subsample_level2_states,
 )
+from hwm_faithful.level2.world_model import Level2TrainForward, Level2WorldModel
 
 __all__ = [
     "Level2ActionEncoder",
@@ -27,7 +31,12 @@ __all__ = [
     "Level2ActionPosterior",
     "Level2IdentityEncoder",
     "Level2Inputs",
+    "Level2Predictor",
+    "Level2PredictorOutput",
+    "Level2RolloutOutput",
     "Level2TemporalConfig",
+    "Level2TrainForward",
+    "Level2WorldModel",
     "PosteriorOutput",
     "build_level2_inputs",
     "chunk_level2_actions",

@@ -28,7 +28,7 @@ class Level2ActionEncoderOutput(NamedTuple):
 
 
 class Level2ActionEncoder(nn.Module):
-    """Maps ``z`` before the (not-yet-implemented) L2 conv predictor."""
+    """Maps ``z`` before the L2 conv predictor (``f_H`` action branch)."""
 
     def __init__(
         self,

@@ -1,8 +1,8 @@
 # Faithful HWM Port Plan
 
-**Status:** Architecture plan complete. **M1–M5 implemented**. M5 is skip-10 L2 inputs + latent `z` (no `f_H`). **M6 and later are not started**. No dataset regeneration, no PACE jobs.
+**Status:** Architecture plan complete. **M1–M7 implemented**. M7 is Level-2 MPPI `pi_H` plus hierarchical handoff. **M8 (Diverse Maze env eval) is not started**. No dataset regeneration, no PACE jobs.
 
-**Date:** 2026-09-09 (M1–M4); M5: 2026-09-10
+**Date:** 2026-09-09 (M1–M4); M5–M7: 2026-09-10
 
 **Original HWM reference:** [kevinghst/HWM_PLDM](https://github.com/kevinghst/HWM_PLDM) at SHA `e197375b844692a0a2e1342889f95a78edced07a` (read-only). Local clone used for tracing: `hwm-original-repro`.
 
@@ -425,8 +425,8 @@ Do **not** pretend this is a clean 1-1 with the current AntMaze code.
 | `ρ` / `E` | L1 visual encoder `MeNet6` (`d4rl_a`) + late proprio expander | Learned. Output is spatial `[16+2, 43, 43]`, not 29D identity. |
 | `f_L` | L1 residual conv predictor, primitive `a ∈ R^2` | Predictive model in **representation** space, not `s_{t+1} = s_t + MLP([s,a])`. |
 | `pi_L` | **L1 MPPI planner** (`Level1MPPIPlanner`, M4), not a BC worker | Online planning: `pi_L(h, o*; f_L)`. No cloned neural worker. |
-| `f_H` | L2 residual conv predictor on `z ∈ R^8` | Explicit learned high-level world model. Operates on L1 features, skip 10. |
-| `pi_H` | **L2 MPPI planner** | Not a learned manager, not candidate retrieval, not `Q_H`. |
+| `f_H` | L2 residual conv predictor on `z ∈ R^8` | **Implemented (M6)** as `Level2Predictor`. Operates on L1 features, skip 10. |
+| `pi_H` | **L2 MPPI planner** (`Level2MPPIPlanner`, M7) | Online planning: `pi_H(H, o*; f_H)`. Not a learned manager, not candidate retrieval, not `Q_H`. |
 
 Imperfect fits (say so rather than force them):
 
@@ -455,11 +455,11 @@ Current repo (`src/hwm_director/`): identity `E`, 29D AntMaze, BC worker, one-st
 | 4 | Proprioception | vel fused as 2 extra channels | `MeNet6` late `id_expand`; maze2d has empty qpos | `[B,2]` | `[B,2,43,43]` | PredictionProprio | packed into 29D vector, no separate stream | **MISSING** as a separate stream | `ProprioExpander` |
 | 5 | L2 input representation | L1 features, not raw pixels | `encoders.py::IdentityEncoder` (`arch=identity_encoder`) | L1 o,p | concat `[B,18,43,43]` | none (identity) | n/a (we have no L1 features) | **MISSING** | `Level2IdentityBackbone` with an explicit comment that this is identity-on-L1 |
 | 6 | Temporal abstraction | L2 step = 10 wrapper steps | `d4rl.py` `skip_frame=l2_step_skip`; `HJEPA.step_skip` | length-61 window | 7 L2 states, 6 chunks | — | `K=10` is a worker horizon, not a learned skip | **PARTIAL** | Dataset sampler with `step_skip=10` |
-| 7 | L2 predictive WM `f_H` | `Ĥ_{τ+1}=H_τ+Conv([H_τ,enc(z)])` | `ConvPredictor` `l2_d4rl_e_p` | `[B,18,43,43]`, `[B,8]` | `[B,18,43,43]` | PredictionObs+Proprio | MLP `f_H_phi(h, g_xy)` 31→29 | **MISSING** | `Level2WorldModel` |
+| 7 | L2 predictive WM `f_H` | `Ĥ_{τ+1}=H_τ+Conv([H_τ,enc(z)])` | `ConvPredictor` `l2_d4rl_e_p` | `[B,18,43,43]`, `[B,8]` | `[B,18,43,43]` | PredictionObs+Proprio | MLP `f_H_phi(h, g_xy)` 31→29 in `hwm_director` | **IMPLEMENTED** in `hwm_faithful` (M6) | `Level2Predictor` / `Level2WorldModel` |
 | 8 | Latent `z` / action abstraction | high-level action | `sequence_predictor.py` posterior `32-32`; `misc.py::PosteriorContinuous` | `[B,20]` | `[B,8]` | implicit via prediction | none (`g_τ` is xy) | **MISSING** | `LatentActionPosterior` |
 | 9 | L1 planner | online primitive MPC | `mppi_planner.py`, `mpc.py` | `h_t`, target repr | `a ∈ R^2` | none (planning) | BC MLP worker | **MISSING** | `Level1MPPI` |
-| 10 | L2 planner | online latent MPC | same, `latent_actions=True` | `H_t`, goal repr | `z ∈ R^8` | none | candidate/`Q_H` manager | **MISSING** | `Level2MPPI` |
-| 11 | Hierarchical MPPI | L2 plan → first predicted state → L1 plan → env | `two_lvl_planner.py`, `hmpc.py` | current image | env action `(2,)` | none | SoftReach over dataset subgoals | **MISSING** | `HierarchicalMPPI` |
+| 10 | L2 planner | online latent MPC | same, `latent_actions=True` | `H_t`, goal repr | `z ∈ R^8` | none | candidate/`Q_H` manager in `hwm_director` | **IMPLEMENTED** in `hwm_faithful` (M7) | `Level2MPPIPlanner` |
+| 11 | Hierarchical MPPI | L2 plan → first predicted state → L1 plan → env | `two_lvl_planner.py`, `hmpc.py` | current image | env action `(2,)` | none | SoftReach over dataset subgoals | **IMPLEMENTED** planner-side in `hwm_faithful` (M7); no env loop | `HierarchicalPlanner` |
 | 12 | Goal representation | encoded goal **image** | `mpc.py::_encode_targets` + `NormEvalWrapper.get_target_obs` | render at xy* | flattened `o*` | none | raw `desired_goal` `(2,)` | **MISSING** | encode goal the same way as observations |
 | 13 | Training objectives | L1 VICReg+IDM+proprio; L2 pred obs+proprio | `objectives/{vicreg,idm,prediction}.py` | JEPA ForwardResult | scalar | as named | BC / 1-step MSE / K-step MSE | **MISSING** | `hwm_faithful/losses` |
 | 14 | Normalization | per-channel image, action, loc, vel; optional L2 z bounds at eval | `pldm_envs/utils/normalizer.py` | raw tensors | z-scored | stats hardset for maze2d | `StateNormalizer` on 29D | **PARTIAL** (idea exists, stats/domain differ) | Diverse Maze normalizer, do not reuse AntMaze stats |
@@ -609,10 +609,10 @@ Order is driven by code: L1 is a frozen encoder for L2, and hierarchical plannin
 | **M2** | L1 residual conv world model | **IMPLEMENTED** (2026-09-09). Recursive 14-step rollout `[15,B,18,43,43]`; residual on all 18 fused channels; action expand to 2 spatial channels. See Section 18. |
 | **M3** | L1 training + representation checks | **IMPLEMENTED** (2026-09-09) for **objectives + tiny overfit only**. VICRegObs+IDM+PredProprio match released L1 YAML; full Diverse Maze training and location probes are later. See Section 19. |
 | **M4** | L1 MPPI | **IMPLEMENTED** (2026-09-09). Original MPPI semantics, representation cost, synthetic + random-weight smoke. No full Diverse Maze eval. See Section 20. |
-| **M5** | L2 skip-10 + identity backbone + latent `z` | **IMPLEMENTED** (2026-09-10). Temporal abstraction, posterior, action encoder `8-64-8`. **No `f_H`.** See Section 21. |
-| **M6** | L2 residual conv predictor `f_H` | `H_τ, z_τ → Ĥ_{τ+1}` with `l2_d4rl_e_p`; not started |
-| **M7** | Hierarchical MPPI | `pred_obs[1]` as L1 target; replan_every=4; action_repeat=4; final 15-step L1 |
-| **M8** | End-to-end Diverse Maze eval | medium + hard, 40 envs, success `< 0.5` m |
+| **M5** | L2 skip-10 + identity backbone + latent `z` | **IMPLEMENTED** (2026-09-10). Temporal abstraction, posterior, action encoder `8-64-8`. See Section 21. |
+| **M6** | L2 residual conv predictor `f_H` | **IMPLEMENTED** (2026-09-10). `l2_d4rl_e_p`, residual on all 18 channels, recursive T=6 rollout, PredictionObs+Proprio. See Section 22. |
+| **M7** | Hierarchical MPPI | **IMPLEMENTED** (2026-09-10) for `pi_H` + `pred_obs[1]` handoff + final-transition planner call. No env loop / Diverse Maze eval. See Section 23. |
+| **M8** | End-to-end Diverse Maze eval | medium + hard, 40 envs, success `< 0.5` m; **not started** |
 | **M9** | Compare to original-code reproduction | Target: medium **82.5%**, hard **90.0%**. Report gaps; do not tune on AntMaze |
 | **M10** | Only after M9, port faithful pieces into Wu `M_hier` on AntMaze | New code paths; baseline 32%/22% numbers remain |
 
@@ -1213,7 +1213,7 @@ Level-2 world model, latent `z`, Level-2 MPPI, hierarchical planner, Diverse Maz
 
 ## 21. M5 implementation (L2 skip-10 inputs and latent `z`)
 
-**Status: IMPLEMENTED** for temporal abstraction, identity L2 state, train-time posterior, and L2 action encoder. **No Level-2 predictor `f_H`.** M6 is not started.
+**Status: IMPLEMENTED** for temporal abstraction, identity L2 state, train-time posterior, and L2 action encoder. Level-2 predictor `f_H` is M6 (Section 22).
 
 ### Files
 
@@ -1339,10 +1339,366 @@ Smoke: L1 fused `[61,2,18,43,43]` → L2 states `[7,2,18,43,43]`, chunks `[6,2,1
 - Clean modules; no `SequencePredictor` / `ConvPredictor` / dataset I/O.
 - `ReLU()` not `ReLU(inplace=True)` (values identical).
 - Dense fused + subsample is supported as equivalent to original “subsample images then encode”.
-- `f_H`, L2 losses, L2 MPPI not implemented.
 - Optional `stochastic=True` exists for tests; released path is deterministic `z=mu`.
+- L2 MPPI / hierarchical planner are later (M7).
 
 ### Not in M5
 
-Level-2 conv predictor `f_H`, L2 losses, L2 MPPI, hierarchical planner, Diverse Maze eval, full training, AntMaze, datasets, PACE jobs. **M6 is not started.**
+Level-2 MPPI, hierarchical planner, Diverse Maze eval, full training, AntMaze, datasets, PACE jobs. `f_H` and L2 prediction losses are M6 (Section 22).
+
+---
+
+## 22. M6 implementation (Level-2 residual predictor `f_H`)
+
+**Status: IMPLEMENTED** for architecture parity, parameter parity of executed `f_H`, recursive rollout, PredictionObs + PredictionProprio, tiny overfit, and M5→M6 smoke. **M7 is not started.**
+
+### Mapping
+
+```
+f_H(H_t, z_t) → Ĥ_{t+1}
+```
+
+`f_H` is the Level-2 residual predictive world model conditioned on latent macro-action `z ∈ R^8`. One L2 transition spans **10 Level-1 wrapper steps**. Posterior is train-time only; planning later proposes `z` directly into `f_H`.
+
+Wu status after M6: `E` = L1 encoder, `f_L` = L1 predictor, `pi_L` = L1 MPPI, `f_H` = this module. Missing: `pi_H` = L2 MPPI (M7).
+
+### Files
+
+```
+src/hwm_faithful/level2/predictor.py
+src/hwm_faithful/level2/world_model.py
+src/hwm_faithful/losses/prediction_obs.py
+src/hwm_faithful/losses/level2_objective.py
+tests/test_hwm_faithful_level2_predictor.py
+scripts/smoke_hwm_faithful_level2_predictor.py
+scripts/overfit_hwm_faithful_level2_tiny.py
+scripts/count_original_l2_predictor_params.py
+```
+
+Also: `shapes.py` (`L2_PREDICTOR_IN_CHANNELS=26`), `losses/coefficients.py` (`PRED_OBS_COEFF`).
+
+### Original classes / functions traced (SHA `e197375`)
+
+| Original | Role |
+| --- | --- |
+| `pldm/models/predictors/predictors.py` `build_predictor` | `predictor_arch=conv2` → `ConvPredictor` |
+| `ConvPredictorConfig["l2_d4rl_e_p"]` | 5-layer conv table (first in-ch **42 overridden**) |
+| `pldm/models/utils.py` `build_conv(..., group_factor=8)` | GN+ReLU on all but last conv |
+| `ConvPredictor.forward` | `z → MLP 8-64-8 → Expander2D → cat([H, z_map], 1) → conv → residual` |
+| `SequencePredictor.forward_multiple` | open-loop from `state_encs[0]`; `z = posterior_mu` |
+| `IdentityEncoder` | concat L1 visual+proprio; **0** learned params; no extra norm |
+| `pldm/objectives/prediction.py` `PredictionObjective` | `(enc[1:]-pred[1:]).pow(2).mean() * global_coeff` |
+| `large_diverse_25maps_l2.yaml` `objectives_l2` | **only** PredictionObs + PredictionProprio |
+
+YAML `predictor_ln: true` constructs `SequencePredictor.final_ln = LayerNorm((18,43,43))` (**66564** params). `ConvPredictor.forward` **never applies it**. We omit it (executed path, not the unused YAML name).
+
+### Exact L2 state into the predictor
+
+`H_t ∈ [B, 18, 43, 43]`: channels `0:16` visual, `16:18` expanded proprio. Full fused 18-channel state. No new learned L2 encoder, no extra normalization, no compression. Identity backbone is concat-only (M5).
+
+### Exact `z` conditioning and predictor input
+
+```
+z [B, 8]
+  → Linear 8→64 + ReLU
+  → Linear 64→8
+  → Expander2D → z_map [B, 8, 43, 43]
+x = cat([H, z_map], dim=1)     # [B, 26, 43, 43]
+```
+
+Order is **H then z_map**. `action_encoder_arch` includes the input width 8.
+
+### Exact `l2_d4rl_e_p` executed layers
+
+Table entry starts at 42 in-channels; `build_conv` overrides layer 0 to **26**. `group_factor=8` → `GroupNorm(32//8)=GroupNorm(4)`. Spatial size stays 43 (`k=5,s=1,p=2`). Last layer: Conv only (no GN, no ReLU).
+
+| # | in → out | k | s | p | norm | act |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 26 → 32 | 5 | 1 | 2 | GN(4) | ReLU |
+| 2 | 32 → 32 | 5 | 1 | 2 | GN(4) | ReLU |
+| 3 | 32 → 32 | 5 | 1 | 2 | GN(4) | ReLU |
+| 4 | 32 → 32 | 5 | 1 | 2 | GN(4) | ReLU |
+| 5 | 32 → 18 | 5 | 1 | 2 | none | none |
+
+### Residual semantics
+
+```
+delta = conv(cat(H, z_map))     # [B, 18, 43, 43]
+H_next = H + delta              # all 18 fused channels
+```
+
+No post-add normalization. Residual is **not** visual-only.
+
+### Parameter counts (live original vs ours)
+
+Original instantiated with released L2 predictor config; counted `.layers` + `.action_encoder` only (not posterior, not unused LN).
+
+| Module | Original | Ours |
+| --- | --- | --- |
+| action encoder `8-64-8` | **1096** | **1096** |
+| conv `l2_d4rl_e_p` | **112402** | **112402** |
+| **`f_H` total** | **113498** | **113498** |
+| posterior (not part of `f_H`) | 2272 | 2272 |
+| identity backbone | 0 | 0 |
+| unused `final_ln` | 66564 | **omitted** (never applied) |
+
+Trainable L2 graph (posterior + `f_H`): **115770**.
+
+### Rollout
+
+`H0 [B,18,43,43]`, `z_seq [T,B,8]` → `[T+1,B,18,43,43]`.
+
+`pred[0] = H0`; `pred[t+1] = f_H(pred[t], z[t])` using **predicted** `H`, not teacher-forced GT.
+
+Released training: `T = 6` → `[7, B, 18, 43, 43]`.
+
+### Training forward (no optimizer)
+
+`H_gt [7,B,18,43,43]`, chunks `[6,B,10,2]`:
+
+1. posterior each chunk → `z [6,B,8]` (`z = mu`)
+2. open-loop `f_H` from `H_gt[0]` → `H_pred [7,B,18,43,43]`
+
+Exposes `z`, `posterior_mu`, `posterior_std`, `H_gt`, `H_pred`.
+
+### Exact L2 losses
+
+Released `objectives_l2.objectives`: **PredictionObs**, **PredictionProprio** only. No VICReg, IDM, or KL.
+
+Original `PredictionObjective.__call__`:
+
+```
+encodings = backbone.{obs,proprio}_component[1:]
+predictions = pred_output.{obs,proprio}_component[1:]
+pred_loss = (encodings - predictions).pow(2).mean()
+total = pred_loss * global_coeff
+```
+
+No detach. No extra spatial reduction. Index 0 (copied `H0`) is excluded. Both YAML coeffs are `2.416154262252218`.
+
+```
+L_obs     = 2.416154262252218 * mean((H_pred[1:, :16] - H_gt[1:, :16])²)
+L_proprio = 2.416154262252218 * mean((H_pred[1:, 16:] - H_gt[1:, 16:])²)
+L         = L_obs + L_proprio
+```
+
+Time alignment: `pred[t]` vs `gt[t]` for `t = 1..6` (predictions of states at L1 times 10,20,…,60).
+
+### Posterior `mu` / `std` gradients under L2 loss
+
+`z = mu`; `std` is computed (`softplus + 0.05`) and stored, but does not enter `f_H` or the prediction losses. **No KL.**
+
+Under actual L2 loss: last posterior linear `32→16` — **mu half (`weight[:8]`) gets gradient**; **std half (`weight[8:]`) gradient is exactly 0**. LayerNorm on mu gets gradient. This is original behavior; we do not “fix” it.
+
+### Tests
+
+```
+PYTHONPATH=src python -m pytest tests/test_hwm_faithful_level2_predictor.py -q
+PYTHONPATH=src python scripts/smoke_hwm_faithful_level2_predictor.py
+PYTHONPATH=src python scripts/overfit_hwm_faithful_level2_tiny.py
+```
+
+Results (CPU, 2026-09-10): **21 passed in 105.42s**.
+
+### Tiny overfit
+
+Synthetic `B=2`, 7 L2 states, 6 action chunks. Adam `lr=1e-3`, 40 steps. Train posterior + L2 action encoder + L2 predictor only (no L1).
+
+| | total | obs | proprio |
+| --- | --- | --- | --- |
+| step 0 | 6.293263 | 3.311854 | 2.981409 |
+| step 20 | 0.323978 | 0.296541 | 0.027438 |
+| step 39 | 0.061829 | 0.051963 | 0.009866 |
+
+`6.293263 → 0.061829` (decreased). Graph can overfit a tiny deterministic sample.
+
+### Differences from original
+
+- Clean `Level2Predictor` accepts `z` directly; posterior lives on `Level2WorldModel` (train helper), not inside `f_H`.
+- Omit unused `SequencePredictor.final_ln` (66564 params, never applied in `ConvPredictor.forward`).
+- `ReLU()` not `ReLU(inplace=True)`.
+- No `HJEPA` / dataset / optimizer / L2 MPPI / prior / VICReg / IDM / KL.
+
+### Not in M6
+
+Level-2 MPPI, hierarchical planner, environment eval, full Diverse Maze training, AntMaze, datasets, PACE jobs. **M7 is Section 23.**
+
+---
+
+## 23. M7 implementation (Level-2 MPPI `pi_H` + hierarchical handoff)
+
+**Status: IMPLEMENTED** for L2 MPPI equations, z bounds, unused `z_reg`, visual cost, variable T2 helper, `pred_obs[1]` handoff, L1 horizon = 10, final-transition planner call, synthetic tests, and hierarchy smoke. **M8 is not started** (no env loop / Diverse Maze eval).
+
+### Mapping
+
+```
+z_{0:T2-1} = pi_H(H_t, o*; f_H)
+```
+
+`pi_H` is online MPPI over latent macros `z ∈ R^8`. The first coarse predicted visual `pred_obs[1]` (one L2 step = 10 L1 wrapper steps) is the L1 target:
+
+```
+a_{0:9} = pi_L(H_t, pred_obs[1]; f_L)
+```
+
+Wu mapping is now complete on the planner/model side:
+
+| symbol | module |
+| --- | --- |
+| `E` | L1 encoder (M1) |
+| `f_L` | L1 residual predictor (M2) |
+| `pi_L` | L1 MPPI (M4) |
+| `f_H` | L2 residual predictor (M6) |
+| `pi_H` | L2 MPPI (M7) |
+
+### Files
+
+```
+src/hwm_faithful/planning/level2_planner.py
+src/hwm_faithful/planning/hierarchical_planner.py
+src/hwm_faithful/planning/config.py          # Level2MPPIConfig, HierarchicalPlannerConfig
+src/hwm_faithful/planning/actions.py         # bound_z
+src/hwm_faithful/planning/costs.py           # z_regularization
+src/hwm_faithful/planning/mppi.py            # optional bound_fn
+tests/test_hwm_faithful_level2_mppi.py
+tests/test_hwm_faithful_hierarchical_planner.py
+scripts/smoke_hwm_faithful_level2_mppi.py
+scripts/smoke_hwm_faithful_hierarchical.py
+```
+
+### Original classes traced (SHA `e197375`)
+
+| Original | Role |
+| --- | --- |
+| `pldm/planning/mpc.py` `_construct_planner(l2=True)` | `latent_actions=True`; `clamp_actions=True`; `ReprTargetMPCObjective2` |
+| `pldm/planning/planners/mppi_planner.py` `MPPIPlanner` | per-env MPPI; `@torch.no_grad`; one `command(shift=False)` |
+| `LearnedDynamics` | `forward_multiple(..., latents=z)` when `action_dim=0` |
+| `RunningCost` | actual step cost (visual MSE); not `Objective2.__call__` |
+| `mppi_torch.py` `MPPI` | sample, bound, perturbation cost, weights, `U` update |
+| `normalize_actions` | L2: **per-component clamp** (`clamp_actions=True`) |
+| `two_lvl_planner.py` `TwoLvlPlanner` | `reset_targets(pred_obs[1])`; L1 `plan_size=l2_step_skip` |
+| `mpc.py` `_perform_h_mpc` | stage 1 hierarchical; stage 2 `final_trans_steps=15` flat L1 |
+| `hmpc.py` `determine_optimal_depths` | **dormant** (`probe_depth=false`) |
+
+### Exact L2 MPPI equations (executed)
+
+`U_H ∈ R^{T2×8}`. `Σ = noise_sigma · I` with **`noise_sigma=10` the diagonal variance** (`std=√10`). `l2_use_latent_mean_std=false` → zero-mean isotropic Gaussian, not dataset latent std.
+
+```
+ε ~ N(0, 10 I)                      # [K, T2, 8]
+ũ = clamp(U_H + ε, -2.5, 2.5)       # per-component (see bounds)
+ε' = ũ − U_H
+c_k^roll = Σ_{t=1}^{T2} mean_D (flatten(ô_t^{(k)}) − flatten(o*))^2
+c_k^pert = λ Σ_{t,i} U_{t,i} (Σ^{-1} ε')_{k,t,i}
+c_k = c_k^roll + c_k^pert           # z_reg NOT added
+β = min_k c_k
+ω_k = exp(−(c_k − β) / λ) / Σ_j exp(−(c_j − β) / λ)
+U_H ← U_H + Σ_k ω_k ε'_k
+```
+
+`λ = 0.0025`. **Refinement iterations: 1.** `u_per_command=-1` returns full `U_H`.
+
+Returned `z_sequence` is **bound** `U_H`. Returned trajectory is rolled from **unbounded** `U_H` (same L1 quirk). No `unnormalize` on latent `z`.
+
+### z bounds / transform
+
+YAML `min_step=-2.5`, `max_step=2.5`. Because `latent_actions` forces `clamp_actions=True`, this is **per-component clamp**, not L1's Euclidean-norm rescale, and not a 2.5-radius ball.
+
+Released eval (`l2_latent_bounds_percentile=2.0`) replaces YAML ±2.5 with dataset percentile bounds, then clamps to `(min+0.1, max-0.1)`. Optional `z_min_bounds` / `z_max_bounds` on `Level2MPPIConfig` implement that path.
+
+Quirk **not** used as maze default: without percentile stats, original `shape[-1]==8` branch clamps to leftover **Ant joint limits**. That would prevent faithful maze `z` ranges; M7 defaults to YAML ±2.5 per component.
+
+### `z_reg_coeff=0.1`
+
+Computed inside `_compute_rollout_costs` when `latent_actions`:
+
+```
+z_reg = −Normal(0,1).log_prob(ũ).mean(dim=(1,2)) * 0.1
+```
+
+**Never added to `cost_total`.** Candidate-dependent, unused. We compute it for diagnostics (`z_reg_applied=False`) and do not “fix” it.
+
+### L2 representation cost
+
+Same `RunningCost` as L1: **visual `obs_component` only** `[K,16,43,43]`, flattened MSE, **sum** over predicted steps (`h0` excluded). `sum_all_diffs=true` → all `t=1..T2`. Proprio excluded. Target is the **encoded final goal image** visual map (L2 identity `obs_component` is still 16 channels). No extra normalization. `loss_coeff_*` unused on this path. `Objective2.__call__` is unused by MPPI.
+
+### Plan horizon
+
+**Active (env loop, not inside `plan()`):**
+
+```
+T2 = max(min_plan_length, ceil((max_plan_length_l2 * 10 − env_step) / 10))
+```
+
+Difficulty override copies `max_plan_length_l2` onto `level2.max_plan_length`: medium **35**, hard **47**. YAML `max_plan_length=18` is the pre-override default. `min_plan_length=3`. Helper: `l2_env_plan_size`.
+
+**Dormant:** `probe_depth=false` → `determine_optimal_depths` is never called.
+
+The planner itself just uses the `plan_horizon` argument (like L1).
+
+### Warm start
+
+Inside `plan()`: `shift_nominal_trajectory=False`. If `plan_size < last_plan_size`, shift `U` that many times then `change_horizon`. Env `replan_every=4` is **not** implemented here (env loop, M8).
+
+### L2→L1 handoff
+
+Exact original:
+
+```
+l1_planner.reset_targets(l2_result.pred_obs[1].detach(), repr_input=True)
+l1_planner.plan(..., plan_size=self.l2_step_skip)
+```
+
+- L1 target = first **predicted** L2 visual after current `H` → `[B,16,43,43]`
+- Corresponds to **+10** wrapper steps
+- Proprio ignored in the L1 target
+- Hierarchical L1 does **not** receive the final goal (except stage 2)
+- `pred_encoder = L2 IdentityEncoder` on hierarchical L1 is a no-op on already-visual maps
+
+### L1 horizon in hierarchy
+
+**Always `l2_step_skip = 10`.** Does not change near the terminal L2 transition. `final_trans_steps` is a separate later call.
+
+### Final transition
+
+Not inside `TwoLvlPlanner`. Env loop: hierarchical MPC for `n_steps - 15`, then flat L1 MPPI toward the **final goal encoding** for `final_trans_steps=15`. `HierarchicalPlanner.plan_final_transition` is that planner-side call. No env stepping.
+
+### Posterior at plan time
+
+**Unused.** Train: chunk → posterior → `z`. Plan: MPPI samples `z` → `f_H`. Smoke: `posterior calls during plan 0`.
+
+### No-grad
+
+`@torch.no_grad()` on `plan` / `plan_final_transition`. Predictors `train(False)` during planning, then restored. No grads into `f_H`, `f_L`, encoder, or posterior.
+
+### Tests
+
+```
+PYTHONPATH=src python -m pytest tests/test_hwm_faithful_level2_mppi.py tests/test_hwm_faithful_hierarchical_planner.py -q
+PYTHONPATH=src python scripts/smoke_hwm_faithful_level2_mppi.py
+PYTHONPATH=src python scripts/smoke_hwm_faithful_hierarchical.py
+```
+
+Results (CPU, 2026-09-10): **22 passed**.
+
+Toy additive `z` (T=1, K=64): **0.180000 → 0.069529**.
+
+Random `f_H` smoke (K=8, T2=3): z `[1,3,8]`, trajectory `[4,1,18,43,43]`, exec **7.697 → 7.663**, finite, `posterior_used=False`, `z_reg_applied=False`, z in `[-2.5,2.5]`.
+
+Hierarchy smoke (L2 K=8 T2=3, L1 K=8 T=10): L1 target `[1,16,43,43]`, primitives `[1,10,2]`, L2 **8.076 → 8.061**, L1 **53.044 → 52.794**, posterior calls **0**.
+
+### Differences / original quirks (not repaired)
+
+- `z_reg` computed, not applied.
+- `probe_depth` / `determine_optimal_depths` dormant.
+- One MPPI refinement.
+- Unbounded `U` used for returned trajectory; bound `z` returned to the caller.
+- YAML ±2.5 ignored when dataset percentile bounds exist; Ant 8-dim clamp leftover unused as maze default.
+- `ReprTargetMPCObjective2.__call__` unused by MPPI (`RunningCost` is the cost).
+- `_slice_control` leftover still covers all timesteps because `norm`/`clamp` is over `nu`.
+- No env loop, `replan_every`, `action_repeat`, or Diverse Maze eval (M8).
+
+### Not in M7
+
+Full Diverse Maze evaluation, dataset percentile bound computation, L1/L2 training, AntMaze, PACE jobs. **M8 is not started.**
 

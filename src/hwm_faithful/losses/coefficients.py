@@ -1,8 +1,10 @@
-"""Released Diverse Maze Level-1 objective coefficients.
+"""Released Diverse Maze Level-1 and Level-2 objective coefficients.
 
-Source: ``pldm/configs/diverse_maze/icml/large_diverse_25maps.yaml``
-at original SHA ``e197375``. Fields present in YAML but **not** in
-``objectives_l1.objectives`` (inactive): ``probe``.
+L1 source: ``pldm/configs/diverse_maze/icml/large_diverse_25maps.yaml``.
+L2 source: ``large_diverse_25maps_l2.yaml`` (PredictionObs / PredictionProprio).
+SHA ``e197375``. L1 YAML fields present but **not** in
+``objectives_l1.objectives`` (inactive): ``probe``. L2 YAML VICReg/probe
+fields are likewise **not** in ``objectives_l2.objectives``.
 
 Temporal VICReg terms with coefficient 0 are not applied
 (``sim_coeff_t``, ``cov_coeff_t``). ``std_coeff_t`` is active.
@@ -34,3 +36,6 @@ IDM_ACTION_DIM = 2
 
 # PredictionObjectiveConfig prediction_proprio
 PRED_PROPRIO_COEFF = 2.416154262252218
+
+# L2 PredictionObs (same coefficient as prediction_proprio in the L2 YAML)
+PRED_OBS_COEFF = 2.416154262252218

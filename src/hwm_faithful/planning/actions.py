@@ -30,6 +30,38 @@ def rescale_action_norm(
     return actions * coeff
 
 
+def bound_z(
+    z: torch.Tensor,
+    min_step: float = -2.5,
+    max_step: float = 2.5,
+    per_dim_min: torch.Tensor | None = None,
+    per_dim_max: torch.Tensor | None = None,
+    margin: float = 0.1,
+) -> torch.Tensor:
+    """L2 latent bound as executed when ``latent_actions`` forces clamp.
+
+    Original ``normalize_actions(..., clamp_actions=True)``:
+
+    - If dataset percentile bounds exist: per-dim clamp to
+      ``(min_bounds+0.1, max_bounds-0.1)``.
+    - Else if last dim is 8 **and** no percentile bounds: a leftover Ant
+      joint-limit table (not maze2d). We do **not** use that as the maze
+      default; it would prevent faithful Diverse Maze execution.
+    - Else: scalar ``torch.clamp(z, min_step, max_step)``.
+
+    M7 default is the scalar YAML ``[-2.5, 2.5]`` per component. Pass
+    ``per_dim_min/max`` later for released percentile eval.
+    """
+    if per_dim_min is not None or per_dim_max is not None:
+        if per_dim_min is None or per_dim_max is None:
+            raise ValueError("per_dim_min and per_dim_max must be provided together")
+        lo = per_dim_min.to(device=z.device, dtype=z.dtype) + margin
+        hi = per_dim_max.to(device=z.device, dtype=z.dtype) - margin
+        shape = [1] * (z.ndim - 1) + [-1]
+        return z.clamp(min=lo.view(*shape), max=hi.view(*shape))
+    return z.clamp(min=min_step, max=max_step)
+
+
 def unnormalize_action(
     actions: torch.Tensor,
     mean: torch.Tensor | None = None,
