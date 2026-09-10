@@ -1,12 +1,68 @@
+# Python
 __pycache__/
 *.py[cod]
-*.egg-info/
-.eggs/
-dist/
-build/
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.hypothesis/
+
+# Virtual environments
 .venv/
 venv/
+env/
+.env/
 .env
+.envrc
+
+# Editors / OS
+.vscode/
+.idea/
 .DS_Store
-checkpoints/*.pt
-!checkpoints/.gitkeep
+Thumbs.db
+
+# Build / package
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Logs (directory-specific; do not globally ignore *.out / *.err)
+/logs/
+/log/
+*.log
+slurm-*.out
+slurm-*.err
+
+# Experiment trackers
+/wandb/
+/runs/
+/tensorboard/
+/tb_logs/
+
+# Checkpoints / local model artifacts
+# Nested under /checkpoints/ only. Do not ignore *.pt globally (fixtures may need it).
+/checkpoints/**
+!/checkpoints/.gitkeep
+
+# Local experiment outputs (generated; not source)
+/outputs/
+/results/
+
+# Root-only data dumps. Do not use a bare `data/` pattern:
+# that would ignore src/*/data/ packages.
+/data/
+/datasets/
+
+# Diverse Maze local render outputs (if copied into this tree)
+**/maze2d_large_diverse_*/images/
+**/maze2d_large_diverse_*/images.npy
+**/images.npy.progress.json
+**/images.npy.progress.w*.json
+
+# Profiling
+*.prof
+.nvidia-nsight*/

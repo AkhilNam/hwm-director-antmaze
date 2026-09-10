@@ -2,6 +2,15 @@
 
 Director vs explicit hierarchical world model (HWM) on AntMaze. Shared: identity $E$, worker $\pi_L$, one-step $f_L$. Director $f_H = (f_L, \pi_L)^K$. HWM $f_H$ is a learned $f_{H\phi}$. Not implemented: RSSM, JEPA, MPC, online RL.
 
+This repo contains two independent packages:
+
+| Package | Role |
+| --- | --- |
+| `src/hwm_director/` | Simplified raw-state AntMaze baseline (identity encoder, Director vs learned $f_H$). |
+| `src/hwm_faithful/` | Faithful HWM port (image Diverse Maze, original architecture and training protocol). |
+
+Port status for the faithful stack is in `docs/HWM_FAITHFUL_PORT_PLAN.md`.
+
 ## Setup
 
 Python 3.10–3.13. Prefer 3.12 or 3.13 if the system Python is newer.
