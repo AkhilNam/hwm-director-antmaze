@@ -1,0 +1,30 @@
+{
+  "label": "smoke",
+  "n_logged": 1,
+  "last": {
+    "epoch": 0,
+    "step": 0,
+    "sample_step": 38528,
+    "lr": 0.0,
+    "batch_size": 128,
+    "grad_norm_encoder": 2.122479832080635,
+    "grad_norm_predictor": 17.743747475901397,
+    "grad_norm_idm": 4.816969182922931,
+    "grad_norm": 18.508070867472263,
+    "train_time": 16.622148275375366,
+    "loss": 6.35509729385376,
+    "vicreg_obs": 4.66197395324707,
+    "vicreg_sim": 0.010958353988826275,
+    "vicreg_std": 0.006445943843573332,
+    "vicreg_cov": 0.08822870999574661,
+    "vicreg_std_t": 0.9880857467651367,
+    "idm": 0.7356894016265869,
+    "idm_action": 0.15293246507644653,
+    "prediction_proprio": 0.9574339985847473,
+    "prediction_proprio_raw": 0.39626362919807434,
+    "gpu_mem_allocated_mb": 68.62592,
+    "gpu_mem_reserved_mb": 7428.112384
+  },
+  "output_dir": "/storage/scratch1/2/anampally3/hwm-director-antmaze/checkpoints/hwm_faithful/l1_smoke",
+  "device": "cuda"
+}

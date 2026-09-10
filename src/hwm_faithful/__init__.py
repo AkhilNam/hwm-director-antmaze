@@ -7,6 +7,7 @@ M5: Level-2 skip-10 inputs and latent action ``z``.
 M6: Level-2 residual predictor ``f_H``.
 M7: Level-2 MPPI planner ``pi_H`` and hierarchical handoff.
 M8: Diverse Maze data, normalization, goal, and eval interface.
+M9: Level-1 training pipeline (real data, L1 only).
 The simplified raw-state baseline remains in ``hwm_director`` and is not
 imported here.
 """

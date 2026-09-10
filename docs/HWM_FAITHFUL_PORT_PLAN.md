@@ -1,8 +1,8 @@
 # Faithful HWM Port Plan
 
-**Status:** Architecture plan complete. **M1–M8 implemented**. M8 is the real Diverse Maze data / eval substrate (no training, no 40-env eval). Env `reset`/`step` smoke is implemented but blocked on this login node by `mujoco_py` GL (no OSMesa headers, no GPU). No dataset regeneration, no full training, no large PACE jobs.
+**Status:** Architecture plan complete. **M1–M8 implemented**. **M9 GPU pipeline done** (job `13067808`: env reset/step closed, probe overfit, 300-step L1 smoke). Full 25-map L1 training is **blocked**: `maze2d_large_diverse_25maps/images.npy` was not found; it was **not** regenerated. **M9 is not complete.** Level 2 has not been trained.
 
-**Date:** 2026-09-09 (M1–M4); M5–M8: 2026-09-10
+**Date:** 2026-09-09 (M1–M4); M5–M9: 2026-09-10
 
 **Original HWM reference:** [kevinghst/HWM_PLDM](https://github.com/kevinghst/HWM_PLDM) at SHA `e197375b844692a0a2e1342889f95a78edced07a` (read-only). Local clone used for tracing: `hwm-original-repro`.
 
@@ -1834,19 +1834,201 @@ Hierarchical one-action on real encoded probe frames (K=4, untrained): L1 target
 
 Pure unit tests use a tiny synthetic pickle+npy. Probe/original-import tests skip if those paths are missing.
 
-### Env reset/step smoke (gap)
+### Env reset/step smoke (gap → GPU job)
 
-Implemented. On this login node `mujoco_py` selects `LinuxCPUExtensionBuilder` (no NVIDIA) and fails compiling `osmesashim.c` (`GL/osmesa.h` missing). Original PACE eval used a GPU runtime. Hierarchical one-action smoke still runs on **real encoded probe frames** (K=4) without env. Adapter `reset`/`step` should be re-run on a GPU node with `LD_LIBRARY_PATH` including `~/.mujoco/mujoco210/bin`. No large PACE job submitted.
+Login-node `mujoco_py` selected `LinuxCPUExtensionBuilder` and failed compiling `osmesashim.c` (`GL/osmesa.h` missing). M9 submits a GPU-node smoke (`scripts/sbatch_hwm_faithful_m9_pipeline.sbatch`, job `13067808`) with the known-good original eval environment:
+
+```
+MUJOCO_GL=egl
+MUJOCO_PY_MUJOCO_PATH=$HOME/.mujoco/mujoco210
+LD_LIBRARY_PATH=...:$HOME/.mujoco/mujoco210/bin:/usr/lib/nvidia
+```
+
+Only `env.reset()` and one `env.step()`. Result JSON: `checkpoints/hwm_faithful/l1_overfit/env_smoke.json` after the job runs. Until that file exists, the env gap is **pending GPU**, not closed.
 
 ### Remaining gaps before full training
 
-- Local 25-map `images.npy` (mmap the existing file on the filesystem that has it; do not regenerate).
-- GPU-node env reset/step + one real `env.step` of an unnormalized primitive.
-- Dataset percentile L2 z bounds (eval-time, not M8).
-- Actual L1 then L2 training (M9+).
+- Local 25-map `images.npy` (mmap the existing file; do not regenerate). **Still missing; this blocks full M9 L1 training.**
+- GPU-node env reset/step (job `13067808`).
+- Dataset percentile L2 z bounds (eval-time, not M8/M9).
+- Actual L1 training on 25 maps (blocked on images).
+- L2 training (M10; do not start until L1 results are reviewed).
 - 40 medium + 40 hard eval vs 82.5% / 90.0%.
 
 ### Not in M8
 
-L1/L2 training, loading original HWM as our model, full medium/hard eval, dataset regeneration, PACE training jobs.
+L1/L2 training, loading original HWM as our model, full medium/hard eval, dataset regeneration.
+
+---
+
+## M9. Real Level-1 training pipeline (RUNNING; full 25-map run BLOCKED)
+
+M9 implements an independent Level-1 trainer matching the released L1 setup (`large_diverse_25maps.yaml` at SHA `e197375`). **Level 2 is not trained.** Original pretrained L1 weights are not used as our model. `src/hwm_director/` is untouched.
+
+### 25-map `images.npy` search (do not regenerate)
+
+Searched (no render, no download of a new corpus):
+
+| Location | Result |
+| --- | --- |
+| YAML `/scratch/wz1232/data/maze2d_large_diverse_25maps/images.npy` | path does not exist here |
+| `hwm-original-repro/.../maze2d_large_diverse_25maps/images.npy` | **missing** |
+| HuggingFace `datasets--kevinghst--maze2d-large-diverse-25maps` | **~281 MB**, pickle/refs only, not the multi-GB image tensor |
+| `.../25maps/images/` PNG dir | 45012 files from cancelled render job **12745852**; incomplete |
+| Probe `.../maze2d_large_diverse_probe/images.npy` | **present**, 2.91 GB, mmap |
+
+Probe corpus (the only accessible real images):
+
+- path: `/storage/scratch1/2/anampally3/hwm-original-repro/pldm_envs/diverse_maze/datasets/maze2d_large_diverse_probe/images.npy`
+- size: 2.91 GB
+- shape: `(101000, 98, 98, 3)` uint8 NHWC
+- mmap: yes (`mmap_mode='r'`)
+- **not** the 4.54M-frame 25-map training set (`EXPECTED_25MAP_FRAMES = 4_540_859`)
+
+**Full L1 training was not launched.** `--mode train` requires `--require-25maps` and aborts unless `images.npy` has 4,540,859 frames.
+
+### Exact original L1 training loop (traced, not inferred)
+
+Sources: `pldm/train.py`, `DatasetFactory` / `D4RLDataset`, `optimizer_factory.py`, `schedulers.py`, `pldm/data/utils.py`, YAML `large_diverse_25maps.yaml`.
+
+Loop (L1-only, `hjepa.disable_l2: true`):
+
+1. `states/actions` CUDA, `transpose(0, 1)` → time-leading
+2. `scheduler.adjust_learning_rate(step)` with `step = epoch * len(loader) + batch_idx`
+3. `sample_step += batch_size`
+4. `forward_posterior` → encode GT sequence, recursive predictor rollout
+5. sum `loss_info.total_loss` over VICRegObs + IDM + PredictionProprio
+6. `backward`; `optimizer.step()`
+7. log every 100 steps; `quick_debug` returns after 5 steps
+8. save when `epoch > 0 and epoch % save_every_n_epochs == 0` or `epoch >= epochs`
+
+`for epoch in range(self.epoch, self.config.epochs + 1)` with `epochs: 3` runs **indices 0,1,2,3** (four passes). We match that via `epoch_end_inclusive=True`.
+
+`val_ds` is `None` (factory). `prioritized: false`. `shuffle=True`, `drop_last=True`. `num_workers=10`, `prefetch_factor=4`. No AMP. No gradient clipping. `compile_model: False`.
+
+L1 windows: `l2_n_steps` defaults to 0, so `max_n_steps = n_steps = 15`. 25-map: 44959 episodes × (101−15) = **3,866,474** windows; with `drop_last` and `batch_size=128` → **30,206** optimizer steps per epoch.
+
+### Active L1 config vs dead YAML
+
+**MODEL (active):** encoder `menet6` / `d4rl_a`, late proprio `id_expand` fuse; predictor `conv2` / `d4rl_b_p` residual, action encoder `id`, `z_dim=0`.
+
+**DATA (active):** `n_steps=15`, `batch_size=128`, `normalize=true`, `normalizer_hardset=true`, dataset `maze2d_large_diverse_25maps`.
+
+**OBJECTIVES (active):** VICRegObs (`sim=1`, `std=29.409481669124336`, `cov=17.8664279184067`, `std_t=2.9199`, `adjust_cov=true`), IDM (`coeff=4.810550706458433`, `arch=conv`, `subclass=a`, `use_pred=false`), PredictionProprio (`2.416154262252218`). Coefficients unchanged.
+
+**OPTIMIZER:** `Adam` (enum value string is `"sgd"`; factory constructs Adam), `base_lr=0.017632900482959527`, `weight_decay=1e-6`. Effective cosine peak `base_lr * 128/256 = 0.00881645`.
+
+**SCHEDULER:** YAML omits `optimizer_schedule` → default **Cosine**, 10% warmup of `epochs * len(loader)`, cosine to `peak * 0.001`. Step 0 has **lr = 0**.
+
+**TRAINING:** `epochs=3`, `seed=246`, `save_every_n_epochs=1`, `resume_if_possible=true`.
+
+**Dead / unused:** `val_fraction=0.2`, `backbone_width_factor=2`, L1 `input_dim=4`, `probe` objective, `sim_coeff_t`/`cov_coeff_t=0`, `wandb`, eval YAML, `hjepa.step_skip=4`.
+
+### Optimizer quirk (documented, not “fixed away”)
+
+Original `OptimizerFactory` Adam param groups are **only** `model.level1` / `level2`. IDM is a standalone `nn.Module` built by `build_objectives_list`, so the original IDM **head** may not receive Adam steps. Encoder still gets IDM gradients. Our trainer sets `include_idm_in_optimizer=True` so the IDM head actually trains (required for the overfit check “IDM decreases”). This is the one intentional optimizer-membership difference.
+
+Overfit / CPU tests use **Constant** schedule (scaled LR, no warmup-zero) so a 40-step sanity run can move. Full/smoke use Cosine.
+
+### Files
+
+```
+src/hwm_faithful/training/
+  config.py scheduler.py checkpoint.py dataset.py
+  level1_trainer.py diagnostics.py cli.py
+scripts/sbatch_hwm_faithful_m9_pipeline.sbatch
+scripts/sbatch_hwm_faithful_l1_full.sbatch
+tests/test_hwm_faithful_level1_trainer.py
+```
+
+Checkpoint keys: `encoder`, `predictor`, `idm`, `optimizer`, `scheduler`, `epoch`, `global_step`, `sample_step`, `config`, `seed`. Format `hwm_faithful_l1`. Resume supported. Independent of original `.ckpt` layout.
+
+### Commands
+
+```
+python -m hwm_faithful.training.cli --mode env-smoke --output-dir checkpoints/hwm_faithful/l1_overfit
+
+python -m hwm_faithful.training.cli --mode overfit \
+  --data-path $PROBE/data.p --images-path $PROBE/images.npy \
+  --output-dir checkpoints/hwm_faithful/l1_overfit --device cuda --no-resume
+
+python -m hwm_faithful.training.cli --mode smoke \
+  --data-path $PROBE/data.p --images-path $PROBE/images.npy \
+  --output-dir checkpoints/hwm_faithful/l1_smoke --device cuda --no-resume --max-steps 300
+
+# Full L1 (blocked until 25-map images.npy exists)
+python -m hwm_faithful.training.cli --mode train \
+  --data-path $TRAIN/data.p --images-path $TRAIN/images.npy \
+  --output-dir checkpoints/hwm_faithful/l1 --device cuda --require-25maps --num-workers 10
+```
+
+PACE: `sbatch scripts/sbatch_hwm_faithful_m9_pipeline.sbatch` (job **13067808**). Full script exists but was **not** submitted.
+
+Account/partition reused from original eval: `-A gts-awu36-paid -q inferno -p gpu-v100 --gres=gpu:1`.
+
+### CPU unit tests (2026-09-10)
+
+`tests/test_hwm_faithful_level1_trainer.py` + M8 data tests: **17 passed**. Covers cosine step-0 LR=0, constant scaling, l1-only window count, two-step train, checkpoint save/load/resume, loader shapes.
+
+### Overfit / GPU smoke / full training results
+
+GPU pipeline job **13067808** finished in 11 min on `gpu-v100` (V100 16GB). Env gap **closed**. Full 25-map L1 was **not** launched.
+
+**Env reset/step (GPU, EGL):** `ok=true`. Image `[3,98,98]`, proprio `[2]`, action accepted, reward `0.0` finite, next obs valid. One step only (`episode_run=false`). `xy` moved slightly. JSON: `checkpoints/hwm_faithful/l1_overfit/env_smoke.json`.
+
+**Tiny real overfit (probe, B=4, 8 windows):** this job only ran **2** optimizer steps because the 2-batch loader finished before `max_steps=40`. The trainer now cycles when `max_steps` is set. Even those 2 steps: loss **69.51 → 54.47**, vicreg_sim 10.40→9.43, IDM 9.21→4.13, proprio 17.96→8.96, no NaN, encoder/predictor/IDM grads finite.
+
+**Short GPU smoke (probe, B=128, 300 steps, Cosine):** loss **71.04 → 6.48** (logged step 290). vicreg_obs 37.1→4.75, vicreg_sim  (pred MSE) → **0.012**, IDM 7.36→0.71, proprio 26.6→1.02. Grad norm 1048→25. LR warmed from 0 then cosine. GPU reserved ~13.4 GB / 16 GB. Throughput ~0.6 s/step after warmup. Checkpoint: `checkpoints/hwm_faithful/l1_smoke/epoch=0_sample_step=38400.pt`.
+
+**Resume:** loaded `latest.pt` (`epoch=0 step=299 sample_step=38400`), two more steps, loss 6.36 finite. Intra-epoch resume restarts the cosine `step` index (original-style); first resumed LR was 0.
+
+**Diagnostics on the 300-step smoke ckpt** (probe batch, B=8):
+
+| horizon | visual MSE | visual no-change | proprio MSE | proprio no-change |
+| --- | --- | --- | --- | --- |
+| 1 | 0.00055 | 0.000037 | **0.011** | 0.067 |
+| 5 | 0.0041 | 0.00023 | **0.168** | 0.302 |
+| 10 | 0.012 | 0.00022 | **0.539** | 0.817 |
+| 14 | 0.021 | 0.00032 | **0.857** | 0.942 |
+
+One-step mean visual 0.0088 vs no-change 0.00023 (maze pixels barely move; no-change is strong). Proprio beats no-change at every horizon. All finite.
+
+**Representation (same batch):** feature std mean 0.0012, **93% of 29584 dims have std < 1e-3**, cov offdiag ~1.6e-9, feature norm mean 225, finite. After 300 steps VICReg has not yet spread the visual map; `std_t` in the train log is still ~0.99 (hinge not satisfied). This is a smoke, not a full 3-epoch run.
+
+**Flat L1 MPPI (K=32, T=10, 2-step overfit weights):** initial cost 44.88 → optimized 43.12, finite actions, env step moved (`xy` changed, image ok).
+
+**Full L1:** **BLOCKED**. `maze2d_large_diverse_25maps/images.npy` not found. Command ready:
+
+```
+sbatch scripts/sbatch_hwm_faithful_l1_full.sbatch
+# or
+python -m hwm_faithful.training.cli --mode train \
+  --data-path $TRAIN/data.p --images-path $TRAIN/images.npy \
+  --output-dir checkpoints/hwm_faithful/l1 --device cuda --require-25maps --num-workers 10
+```
+
+Do **not** mark M9 complete until that 25-map run finishes. Current: **M9 = RUNNING/BLOCKED** (pipeline done, full train blocked on images).
+
+### Prediction / representation / planning
+
+Implemented (`diagnostics.py`, `--mode diagnose`, `--mode plan-smoke`). Numbers after the GPU job. No-change representation is the only baseline. Plan smoke uses small K (32), not the medium/hard benchmark.
+
+### Differences from original training implementation
+
+- Independent modules; not a copy of `Trainer`.
+- Own checkpoint format (`hwm_faithful_l1`).
+- IDM parameters are in Adam (original factory likely omits them).
+- Overfit mode uses Constant LR; original always Cosine.
+- `--mode train` refuses a corpus whose frame count is not 4,540,859.
+- No wandb.
+- No probing / planning eval during training (L1 YAML `eval_during_training: false`).
+- Intra-epoch resume restarts the epoch from batch 0 (same as original).
+
+### Confirmation
+
+- Level 2 was **not** trained.
+- `src/hwm_director/` is **untouched**.
+- 25-map `images.npy` was **not** regenerated.
+- M10 / L2 training will not start until L1 results are reviewed.
+
 

@@ -1,0 +1,53 @@
+{
+  "label": "overfit",
+  "n_logged": 2,
+  "last": {
+    "epoch": 0,
+    "step": 1,
+    "sample_step": 8,
+    "lr": 0.0002755140700462426,
+    "batch_size": 4,
+    "grad_norm_encoder": 84.38288955211108,
+    "grad_norm_predictor": 525.7794120929972,
+    "grad_norm_idm": 71.80227744120965,
+    "grad_norm": 537.3267434957672,
+    "train_time": 0.06849789619445801,
+    "loss": 54.46709060668945,
+    "vicreg_obs": 41.37977600097656,
+    "vicreg_sim": 9.429276466369629,
+    "vicreg_std": 0.988430380821228,
+    "vicreg_cov": 1.2948844663185355e-08,
+    "vicreg_std_t": 0.9867722988128662,
+    "idm": 4.130388259887695,
+    "idm_action": 0.8586102724075317,
+    "prediction_proprio": 8.956928253173828,
+    "prediction_proprio_raw": 3.707101345062256,
+    "gpu_mem_allocated_mb": 68.590592,
+    "gpu_mem_reserved_mb": 522.190848
+  },
+  "output_dir": "/storage/scratch1/2/anampally3/hwm-director-antmaze/checkpoints/hwm_faithful/l1_overfit",
+  "device": "cuda",
+  "overfit": {
+    "n_steps": 2,
+    "first": {
+      "loss": 69.50596618652344,
+      "vicreg_obs": 42.331912994384766,
+      "vicreg_sim": 10.397192001342773,
+      "idm": 9.214296340942383,
+      "prediction_proprio": 17.959758758544922
+    },
+    "last": {
+      "loss": 54.46709060668945,
+      "vicreg_obs": 41.37977600097656,
+      "vicreg_sim": 9.429276466369629,
+      "idm": 4.130388259887695,
+      "prediction_proprio": 8.956928253173828
+    },
+    "nan": false,
+    "loss_decreased": true,
+    "vicreg_obs_decreased": true,
+    "vicreg_sim_decreased": true,
+    "prediction_proprio_decreased": true,
+    "idm_decreased": true
+  }
+}

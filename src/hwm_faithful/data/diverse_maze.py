@@ -213,11 +213,15 @@ class DiverseMazeOfflineDataset:
         normalizer: MazeNormalizer | None = None,
         normalize: bool = True,
         images_memmap: np.ndarray | None = None,
+        l1_only: bool = False,
+        max_windows: int | None = None,
     ) -> None:
         self.pickle_path = Path(pickle_path)
         self.images_path = Path(images_path) if images_path is not None else None
         self.n_steps = int(n_steps)
         self.l2_config = l2_config or Level2TemporalConfig()
+        self.l1_only = bool(l1_only)
+        self.max_windows = max_windows
         self.normalizer = normalizer or default_normalizer()
         self.normalize = bool(normalize)
         if not self.pickle_path.is_file():
@@ -232,7 +236,7 @@ class DiverseMazeOfflineDataset:
         if not isinstance(self.splits, list) or not self.splits:
             raise ValueError(f"expected non-empty episode list in {self.pickle_path}")
 
-        l2_window = self.l2_config.l1_window
+        l2_window = 0 if self.l1_only else self.l2_config.l1_window
         max_n_steps = max(self.n_steps, l2_window)
         self.episode_lengths = np.array(
             [len(ep["observations"]) for ep in self.splits], dtype=np.int64
@@ -265,7 +269,10 @@ class DiverseMazeOfflineDataset:
                 )
 
     def __len__(self) -> int:
-        return int(self.cum_lengths[-1])
+        n = int(self.cum_lengths[-1])
+        if self.max_windows is not None:
+            return min(n, int(self.max_windows))
+        return n
 
     def _locate(self, idx: int) -> tuple[int, int, int]:
         if idx < 0 or idx >= len(self):

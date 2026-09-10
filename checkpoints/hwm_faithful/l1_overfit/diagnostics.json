@@ -1,0 +1,63 @@
+{
+  "prediction": {
+    "one_step_visual_mse": 8.509780883789062,
+    "one_step_proprio_mse": 1.4104118347167969,
+    "one_step_visual_mse_no_change": 0.0008084903238341212,
+    "one_step_proprio_mse_no_change": 0.5561012029647827,
+    "multi_step": {
+      "1": {
+        "visual_mse": 0.11005741357803345,
+        "visual_mse_no_change": 0.00017442071111872792,
+        "proprio_mse": 0.16580000519752502,
+        "proprio_mse_no_change": 0.06708549708127975
+      },
+      "5": {
+        "visual_mse": 2.7963414192199707,
+        "visual_mse_no_change": 0.0008344877860508859,
+        "proprio_mse": 0.8185314536094666,
+        "proprio_mse_no_change": 0.3018861711025238
+      },
+      "10": {
+        "visual_mse": 11.713979721069336,
+        "visual_mse_no_change": 0.000935112067963928,
+        "proprio_mse": 1.7217497825622559,
+        "proprio_mse_no_change": 0.8166360259056091
+      },
+      "14": {
+        "visual_mse": 23.43269157409668,
+        "visual_mse_no_change": 0.0010078828781843185,
+        "proprio_mse": 3.3966152667999268,
+        "proprio_mse_no_change": 0.9419754147529602
+      }
+    },
+    "finite": true
+  },
+  "representation": {
+    "batch": 8,
+    "feature_dim": 29584,
+    "visual_shape": [
+      15,
+      8,
+      16,
+      43,
+      43
+    ],
+    "fused_shape": [
+      15,
+      8,
+      18,
+      43,
+      43
+    ],
+    "feature_std_mean": 0.002987344516441226,
+    "feature_std_min": 2.3223352400236763e-05,
+    "feature_std_max": 0.3250793516635895,
+    "frac_dims_std_lt_1e-3": 0.9321930408477783,
+    "cov_offdiag": 2.803500187553709e-08,
+    "feature_norm_mean": 85.58717346191406,
+    "feature_norm_std": 0.009418741799890995,
+    "finite": true,
+    "channels": 16,
+    "spatial": 43
+  }
+}
